@@ -74,7 +74,7 @@ class AimTrainerApp extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Screen flow: menu <-> settings, menu -> playing -> results
 // ---------------------------------------------------------------------------
-enum _Screen { menu, settings, playing, results }
+enum _Screen { menu, settings, hudEdit, playing, results }
 
 const List<String> kScenarios = ['CUBES'];
 
@@ -90,6 +90,12 @@ class AppSettings {
   Color crosshairBorderColor = const Color(0xFF000000);
   double sensitivity = 1.0;
 
+  // HUD layout. Negative coords mean "default position" (bottom-right).
+  double fireX = -1; // normalized 0..1 center of the FIRE button
+  double fireY = -1;
+  double fireScale = 1.0;
+  double fireOpacity = 1.0;
+
   Future<void> load() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     targetColor = Color(prefs.getInt('target_color') ?? kFg.toARGB32());
@@ -101,6 +107,10 @@ class AppSettings {
     crosshairBorderColor =
         Color(prefs.getInt('crosshair_border_color') ?? 0xFF000000);
     sensitivity = prefs.getDouble('sensitivity') ?? 1.0;
+    fireX = prefs.getDouble('fire_x') ?? -1;
+    fireY = prefs.getDouble('fire_y') ?? -1;
+    fireScale = prefs.getDouble('fire_scale') ?? 1.0;
+    fireOpacity = prefs.getDouble('fire_opacity') ?? 1.0;
   }
 
   Future<void> save() async {
@@ -114,6 +124,10 @@ class AppSettings {
     await prefs.setInt(
         'crosshair_border_color', crosshairBorderColor.toARGB32());
     await prefs.setDouble('sensitivity', sensitivity);
+    await prefs.setDouble('fire_x', fireX);
+    await prefs.setDouble('fire_y', fireY);
+    await prefs.setDouble('fire_scale', fireScale);
+    await prefs.setDouble('fire_opacity', fireOpacity);
   }
 }
 
@@ -224,11 +238,21 @@ class _HomeFlowState extends State<HomeFlow> {
               setState(() {});
               _settings.save();
             },
+            onHud: () => setState(() => _screen = _Screen.hudEdit),
             onBack: () => setState(() => _screen = _Screen.menu),
+          ),
+        _Screen.hudEdit => _HudEditScreen(
+            settings: _settings,
+            onChanged: () {
+              setState(() {});
+              _settings.save();
+            },
+            onBack: () => setState(() => _screen = _Screen.settings),
           ),
         _Screen.playing => GameScreen(
             settings: _settings,
             onFinished: _onRoundFinished,
+            onQuit: () => setState(() => _screen = _Screen.menu),
           ),
         _Screen.results => _ResultsScreen(
             stats: _last!,
@@ -265,7 +289,14 @@ class GameEngine extends ChangeNotifier {
   double clock = 0; // seconds since countdown ended
   double countdown = 3;
   bool running = true;
+  bool paused = false;
   Size arena = Size.zero;
+
+  // HUD layout, copied from AppSettings at round start.
+  double fireXNorm = -1;
+  double fireYNorm = -1;
+  double fireScale = 1.0;
+  double fireOpacity = 1.0;
 
   // First-person camera at the origin, starting square at the target wall.
   double yaw = 0;
@@ -282,14 +313,27 @@ class GameEngine extends ChangeNotifier {
 
   double get focal => arena.shortestSide * 1.1;
 
-  // Fire button geometry (bottom-right HUD).
-  double get fireR => (arena.shortestSide * 0.115).clamp(40.0, 60.0);
-  Offset get fireCenter =>
-      Offset(arena.width - fireR - 26, arena.height - fireR - 30);
+  // Fire button geometry (player-adjustable via Customise HUD).
+  double get fireR =>
+      (arena.shortestSide * 0.115 * fireScale).clamp(28.0, 90.0);
+  Offset get fireCenter {
+    if (fireXNorm < 0 || fireYNorm < 0) {
+      return Offset(arena.width - fireR - 26, arena.height - fireR - 30);
+    }
+    return Offset(
+      (fireXNorm * arena.width).clamp(fireR, arena.width - fireR),
+      (fireYNorm * arena.height).clamp(fireR, arena.height - fireR),
+    );
+  }
+
   bool inFireButton(Offset p) => (p - fireCenter).distance <= fireR * 1.25;
 
+  // Pause button (top-right corner).
+  Rect get pauseRect => Rect.fromLTWH(arena.width - 62, 14, 48, 48);
+  bool inPauseButton(Offset p) => pauseRect.inflate(8).contains(p);
+
   void look(Offset delta) {
-    if (!running) return;
+    if (!running || paused) return;
     final double s = kLookSens * sensitivity;
     yaw += delta.dx * s;
     pitch = (pitch - delta.dy * s).clamp(-kPitchLimit, kPitchLimit);
@@ -308,7 +352,7 @@ class GameEngine extends ChangeNotifier {
   }
 
   void update(double dt) {
-    if (!running) return;
+    if (!running || paused) return;
     if (flashT > 0) flashT -= dt;
     if (hitT > 0) hitT -= dt;
     if (countdown > 0) {
@@ -355,7 +399,7 @@ class GameEngine extends ChangeNotifier {
 
   /// Ray-AABB slab test from the crosshair; nearest hit wins.
   void shoot() {
-    if (!running || countdown > 0) return;
+    if (!running || paused || countdown > 0) return;
     flashT = 0.12;
     HapticFeedback.selectionClick();
     final double cp = math.cos(pitch);
@@ -408,11 +452,16 @@ class GameEngine extends ChangeNotifier {
 // presses FIRE. Listener avoids the gesture-arena delay entirely.
 // ---------------------------------------------------------------------------
 class GameScreen extends StatefulWidget {
-  const GameScreen(
-      {super.key, required this.settings, required this.onFinished});
+  const GameScreen({
+    super.key,
+    required this.settings,
+    required this.onFinished,
+    required this.onQuit,
+  });
 
   final AppSettings settings;
   final void Function(RoundStats) onFinished;
+  final VoidCallback onQuit;
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -432,7 +481,11 @@ class _GameScreenState extends State<GameScreen>
   void initState() {
     super.initState();
     _game = GameEngine(onFinished: widget.onFinished)
-      ..sensitivity = widget.settings.sensitivity;
+      ..sensitivity = widget.settings.sensitivity
+      ..fireXNorm = widget.settings.fireX
+      ..fireYNorm = widget.settings.fireY
+      ..fireScale = widget.settings.fireScale
+      ..fireOpacity = widget.settings.fireOpacity;
     _ticker = createTicker(_tick)..start();
   }
 
@@ -451,7 +504,23 @@ class _GameScreenState extends State<GameScreen>
     super.dispose();
   }
 
+  void _setPaused(bool v) {
+    setState(() {
+      _game.paused = v;
+      if (v) {
+        _ticker.stop();
+      } else {
+        _prev = Duration.zero;
+        _ticker.start();
+      }
+    });
+  }
+
   void _down(PointerDownEvent e) {
+    if (_game.inPauseButton(e.localPosition)) {
+      _setPaused(true);
+      return;
+    }
     if (_game.inFireButton(e.localPosition) && _firePointer == null) {
       _firePointer = e.pointer;
       _game.firePressed = true;
@@ -479,17 +548,46 @@ class _GameScreenState extends State<GameScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Listener(
-      behavior: HitTestBehavior.opaque,
-      onPointerDown: _down,
-      onPointerMove: _move,
-      onPointerUp: (e) => _up(e.pointer),
-      onPointerCancel: (e) => _up(e.pointer),
-      child: CustomPaint(
-        painter: _GamePainter(_game, widget.settings),
-        size: Size.infinite,
-        willChange: true,
-      ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown: _down,
+          onPointerMove: _move,
+          onPointerUp: (e) => _up(e.pointer),
+          onPointerCancel: (e) => _up(e.pointer),
+          child: CustomPaint(
+            painter: _GamePainter(_game, widget.settings),
+            size: Size.infinite,
+            willChange: true,
+          ),
+        ),
+        if (_game.paused)
+          Container(
+            color: kBg.withValues(alpha: 0.88),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('PAUSED', style: _fgStyle(24, spacing: 8)),
+                  const SizedBox(height: 40),
+                  OutlinedButton(
+                    style: _buttonStyle(),
+                    onPressed: () => _setPaused(false),
+                    child: const Text('RESUME'),
+                  ),
+                  const SizedBox(height: 20),
+                  OutlinedButton(
+                    style: _buttonStyle(),
+                    onPressed: widget.onQuit,
+                    child: const Text('MENU'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -539,10 +637,6 @@ class _GamePainter extends CustomPainter {
 
   static final Paint _bgPaint = Paint()..color = kBg;
   static final Paint _fgFill = Paint()..color = kFg;
-  static final Paint _fgStroke = Paint()
-    ..color = kFg
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 2.5;
   static final Paint _gridPaint = Paint()
     ..color = kFg.withValues(alpha: 0.13)
     ..style = PaintingStyle.stroke
@@ -688,6 +782,7 @@ class _GamePainter extends CustomPainter {
     if (game.countdown > 0) {
       final TextPainter tp = _countText.of('${game.countdown.ceil()}');
       tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2));
+      _paintPauseButton(canvas);
       _paintFireButton(canvas);
       return;
     }
@@ -725,26 +820,44 @@ class _GamePainter extends CustomPainter {
       }
     }
 
-    // HUD: time bar, score, countdown clock.
+    // HUD: time bar, score top-left, clock top-center, pause top-right.
     final double frac = game.timeLeft / kRoundSeconds;
     canvas.drawRect(Rect.fromLTWH(0, 0, size.width * frac, 4), _fgFill);
     final TextPainter score = _scoreText.of('${game.stats.score}');
     score.paint(canvas, const Offset(20, 18));
     final TextPainter time = _timeText.of(game.timeLeft.ceil().toString());
-    time.paint(canvas, Offset(size.width - time.width - 20, 18));
+    time.paint(canvas, Offset((size.width - time.width) / 2, 18));
 
+    _paintPauseButton(canvas);
     _paintFireButton(canvas);
+  }
+
+  void _paintPauseButton(Canvas canvas) {
+    final Rect r = game.pauseRect;
+    final Paint bar = Paint()..color = kFg;
+    const double barW = 6, barH = 22;
+    final Offset c = r.center;
+    canvas.drawRect(
+        Rect.fromCenter(
+            center: c - const Offset(6.5, 0), width: barW, height: barH),
+        bar);
+    canvas.drawRect(
+        Rect.fromCenter(
+            center: c + const Offset(6.5, 0), width: barW, height: barH),
+        bar);
   }
 
   void _paintFireButton(Canvas canvas) {
     final Offset c = game.fireCenter;
     final double r = game.fireR;
-    canvas.drawCircle(c, r, _fgStroke);
-    if (game.firePressed) {
-      canvas.drawCircle(c, r * 0.82, _fgFill);
-    } else {
-      canvas.drawCircle(c, r * 0.30, _fgFill);
-    }
+    final double op = game.fireOpacity.clamp(0.15, 1.0);
+    final Paint ring = Paint()
+      ..color = kFg.withValues(alpha: op)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    final Paint fill = Paint()..color = kFg.withValues(alpha: op);
+    canvas.drawCircle(c, r, ring);
+    canvas.drawCircle(c, r * (game.firePressed ? 0.82 : 0.30), fill);
   }
 
   @override
@@ -856,11 +969,13 @@ class _SettingsScreen extends StatelessWidget {
   const _SettingsScreen({
     required this.settings,
     required this.onChanged,
+    required this.onHud,
     required this.onBack,
   });
 
   final AppSettings settings;
   final VoidCallback onChanged;
+  final VoidCallback onHud;
   final VoidCallback onBack;
 
   Widget _label(String s) =>
@@ -1006,6 +1121,12 @@ class _SettingsScreen extends StatelessWidget {
                 const SizedBox(height: 28),
                 OutlinedButton(
                   style: _buttonStyle(),
+                  onPressed: onHud,
+                  child: const Text('CUSTOMISE HUD'),
+                ),
+                const SizedBox(height: 20),
+                OutlinedButton(
+                  style: _buttonStyle(),
                   onPressed: onBack,
                   child: const Text('BACK'),
                 ),
@@ -1015,6 +1136,165 @@ class _SettingsScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HUD editor — drag the FIRE button anywhere; sliders for size and opacity.
+// Future HUD buttons get edited here the same way.
+// ---------------------------------------------------------------------------
+class _HudEditScreen extends StatefulWidget {
+  const _HudEditScreen({
+    required this.settings,
+    required this.onChanged,
+    required this.onBack,
+  });
+
+  final AppSettings settings;
+  final VoidCallback onChanged;
+  final VoidCallback onBack;
+
+  @override
+  State<_HudEditScreen> createState() => _HudEditScreenState();
+}
+
+class _HudEditScreenState extends State<_HudEditScreen> {
+  Widget _sliderRow(String label, String value, double v, double min,
+      double max, ValueChanged<double> set) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Row(
+        children: [
+          SizedBox(
+              width: 90,
+              child: Text(label,
+                  style: _fgStyle(11, weight: FontWeight.w400, spacing: 2))),
+          Expanded(
+            child: SliderTheme(
+              data: SliderThemeData(
+                activeTrackColor: kFg,
+                inactiveTrackColor: kFg.withValues(alpha: .2),
+                thumbColor: kFg,
+                overlayColor: kFg.withValues(alpha: .12),
+                trackHeight: 2,
+              ),
+              child: Slider(
+                value: v,
+                min: min,
+                max: max,
+                onChanged: (nv) {
+                  set(nv);
+                  setState(() {});
+                },
+                onChangeEnd: (_) => widget.onChanged(),
+              ),
+            ),
+          ),
+          SizedBox(width: 44, child: Text(value, style: _fgStyle(11))),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final AppSettings s = widget.settings;
+    final Size size = MediaQuery.sizeOf(context);
+    final double r =
+        (size.shortestSide * 0.115 * s.fireScale).clamp(28.0, 90.0);
+    final Offset c = (s.fireX < 0 || s.fireY < 0)
+        ? Offset(size.width - r - 26, size.height - r - 30)
+        : Offset(
+            (s.fireX * size.width).clamp(r, size.width - r),
+            (s.fireY * size.height).clamp(r, size.height - r),
+          );
+    final double op = s.fireOpacity.clamp(0.15, 1.0);
+
+    return Stack(
+      fit: StackFit.expand,
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(child: Container(color: kBg)),
+        // The draggable FIRE button.
+        Positioned(
+          left: c.dx - r,
+          top: c.dy - r,
+          child: GestureDetector(
+            onPanUpdate: (d) {
+              setState(() {
+                s.fireX = ((c.dx + d.delta.dx) / size.width).clamp(0.0, 1.0);
+                s.fireY = ((c.dy + d.delta.dy) / size.height).clamp(0.0, 1.0);
+              });
+            },
+            onPanEnd: (_) => widget.onChanged(),
+            child: Container(
+              width: r * 2,
+              height: r * 2,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border:
+                    Border.all(color: kFg.withValues(alpha: op), width: 2.5),
+              ),
+              child: Center(
+                child: Container(
+                  width: r * 0.6,
+                  height: r * 0.6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: kFg.withValues(alpha: op),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        // Control panel.
+        SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 16),
+              Text('CUSTOMISE HUD', style: _fgStyle(18, spacing: 6)),
+              const SizedBox(height: 6),
+              Text('DRAG THE FIRE BUTTON TO MOVE IT',
+                  style: _fgStyle(11, weight: FontWeight.w400, spacing: 2)),
+              const SizedBox(height: 12),
+              _sliderRow('SIZE', '${(s.fireScale * 100).round()}%',
+                  s.fireScale, 0.6, 1.8, (v) => s.fireScale = v),
+              _sliderRow('OPACITY', '${(s.fireOpacity * 100).round()}%',
+                  s.fireOpacity, 0.15, 1.0, (v) => s.fireOpacity = v),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        s.fireX = -1;
+                        s.fireY = -1;
+                        s.fireScale = 1.0;
+                        s.fireOpacity = 1.0;
+                      });
+                      widget.onChanged();
+                    },
+                    child: Text('RESET',
+                        style:
+                            _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+                  ),
+                  const SizedBox(width: 24),
+                  TextButton(
+                    onPressed: widget.onBack,
+                    child: Text('DONE',
+                        style:
+                            _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
