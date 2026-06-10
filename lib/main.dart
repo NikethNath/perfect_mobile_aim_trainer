@@ -6,11 +6,21 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // ---------------------------------------------------------------------------
-// Duotone palette — every pixel on screen is one of these two colors
-// (the grid uses a low-alpha tone of the foreground).
+// Palette. Background + UI accent are fixed; the target color is the player's
+// choice from settings.
 // ---------------------------------------------------------------------------
 const Color kBg = Color(0xFF12151A); // charcoal
-const Color kFg = Color(0xFF3DF0B2); // mint
+const Color kFg = Color(0xFF3DF0B2); // mint (UI accent, default target color)
+
+const List<Color> kTargetColors = [
+  kFg,
+  Color(0xFF2ED9FF), // cyan
+  Color(0xFFFFD32A), // yellow
+  Color(0xFFFFA502), // orange
+  Color(0xFFFF4757), // red
+  Color(0xFFFF6BD6), // magenta
+  Color(0xFFF2F5F7), // white
+];
 
 // Gameplay tuning.
 const double kRoundSeconds = 30;
@@ -21,11 +31,19 @@ const double kShrinkTime = 1.2;
 const int kHitScore = 100;
 const int kMissPenalty = 25;
 
-// 3D world tuning.
-const double kWorldRadius = 0.55; // target sphere radius (world units)
+// 3D tuning.
+const double kCubeHalf = 0.5; // target cube half-extent (world units)
 const double kLookSens = 0.0042; // radians per logical pixel of swipe
 const double kPitchLimit = 1.1; // radians
 const double kNearPlane = 0.2;
+
+// The room: a large cube the player stands inside, eye at the origin,
+// centered on the front wall. Targets spawn against the opposite wall.
+const double kRoomHalfW = 7; // x in [-7, 7]
+const double kRoomFloor = -1.7; // eye height 1.7 above the floor
+const double kRoomCeil = 6.3;
+const double kRoomFront = -1; // wall right behind the player
+const double kRoomBack = 14; // target wall
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -56,9 +74,11 @@ class AimTrainerApp extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Screen flow: menu -> playing -> results
+// Screen flow: menu <-> settings, menu -> playing -> results
 // ---------------------------------------------------------------------------
-enum _Screen { menu, playing, results }
+enum _Screen { menu, settings, playing, results }
+
+const List<String> kScenarios = ['CUBES'];
 
 class RoundStats {
   int hits = 0;
@@ -79,17 +99,23 @@ class HomeFlow extends StatefulWidget {
 
 class _HomeFlowState extends State<HomeFlow> {
   static const String _bestKey = 'best_score';
+  static const String _colorKey = 'target_color';
 
   _Screen _screen = _Screen.menu;
   RoundStats? _last;
   int _best = 0;
+  int _scenario = 0;
+  Color _targetColor = kFg;
 
   @override
   void initState() {
     super.initState();
     SharedPreferences.getInstance().then((prefs) {
       if (!mounted) return;
-      setState(() => _best = prefs.getInt(_bestKey) ?? 0);
+      setState(() {
+        _best = prefs.getInt(_bestKey) ?? 0;
+        _targetColor = Color(prefs.getInt(_colorKey) ?? kFg.toARGB32());
+      });
     });
   }
 
@@ -105,15 +131,32 @@ class _HomeFlowState extends State<HomeFlow> {
     });
   }
 
+  void _pickColor(Color c) {
+    setState(() => _targetColor = c);
+    SharedPreferences.getInstance()
+        .then((prefs) => prefs.setInt(_colorKey, c.toARGB32()));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: switch (_screen) {
         _Screen.menu => _MenuScreen(
             best: _best,
+            scenario: _scenario,
+            onScenario: (i) => setState(() => _scenario = i),
             onStart: () => setState(() => _screen = _Screen.playing),
+            onSettings: () => setState(() => _screen = _Screen.settings),
           ),
-        _Screen.playing => GameScreen(onFinished: _onRoundFinished),
+        _Screen.settings => _SettingsScreen(
+            selected: _targetColor,
+            onPick: _pickColor,
+            onBack: () => setState(() => _screen = _Screen.menu),
+          ),
+        _Screen.playing => GameScreen(
+            targetColor: _targetColor,
+            onFinished: _onRoundFinished,
+          ),
         _Screen.results => _ResultsScreen(
             stats: _last!,
             best: _best,
@@ -126,18 +169,16 @@ class _HomeFlowState extends State<HomeFlow> {
 }
 
 // ---------------------------------------------------------------------------
-// Game engine — 3D world, first-person camera, plain Dart advanced by a
+// Game engine — 3D room, first-person camera, plain Dart advanced by a
 // Ticker. No widget rebuilds in the per-frame path.
 // ---------------------------------------------------------------------------
-class Target3D {
-  Target3D(this.x, this.y, this.z, this.born);
+class TargetCube {
+  TargetCube(this.x, this.y, this.z, this.born);
 
-  final double x; // world position
+  final double x; // world-space center
   final double y;
   final double z;
   final double born; // game clock seconds at spawn
-
-  double get dist => math.sqrt(x * x + y * y + z * z);
 }
 
 class GameEngine extends ChangeNotifier {
@@ -145,7 +186,7 @@ class GameEngine extends ChangeNotifier {
 
   final void Function(RoundStats) onFinished;
   final math.Random _rng = math.Random();
-  final List<Target3D> targets = <Target3D>[];
+  final List<TargetCube> targets = <TargetCube>[];
 
   RoundStats stats = RoundStats();
   double clock = 0; // seconds since countdown ended
@@ -153,7 +194,7 @@ class GameEngine extends ChangeNotifier {
   bool running = true;
   Size arena = Size.zero;
 
-  // First-person camera at the origin.
+  // First-person camera at the origin, starting square at the target wall.
   double yaw = 0;
   double pitch = 0;
 
@@ -220,54 +261,67 @@ class GameEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Grow-in / shrink-out lifetime profile, in world units.
-  double worldRadiusOf(Target3D t) {
+  /// Grow-in / shrink-out lifetime profile applied to the cube half-extent.
+  double halfOf(TargetCube t) {
     final double age = clock - t.born;
     final double grow =
         Curves.easeOutBack.transform((age / kGrowTime).clamp(0.0, 1.0));
     final double shrink = ((kTargetLife - age) / kShrinkTime).clamp(0.0, 1.0);
-    return kWorldRadius * grow * shrink;
+    return kCubeHalf * grow * shrink;
   }
 
-  Target3D _spawn() {
-    double x = 0, y = 0, z = 7;
+  /// Cubes spawn against the wall opposite the player.
+  TargetCube _spawn() {
+    const double z = kRoomBack - kCubeHalf - 0.3;
+    double x = 0, y = 1.5;
     for (int i = 0; i < 24; i++) {
-      final double az = (_rng.nextDouble() * 2 - 1) * 1.0; // +/- 57 deg
-      final double el = -0.25 + _rng.nextDouble() * 0.65;
-      final double d = 5 + _rng.nextDouble() * 4;
-      x = d * math.cos(el) * math.sin(az);
-      y = d * math.sin(el);
-      z = d * math.cos(el) * math.cos(az);
-      final double dNew = math.sqrt(x * x + y * y + z * z);
+      x = (_rng.nextDouble() * 2 - 1) * (kRoomHalfW - 2);
+      y = kRoomFloor + 1.0 + _rng.nextDouble() * (kRoomCeil - kRoomFloor - 2.5);
       final bool clear = targets.every((t) {
-        final double dot =
-            (x * t.x + y * t.y + z * t.z) / (dNew * t.dist);
-        return math.acos(dot.clamp(-1.0, 1.0)) > 0.22;
+        final double dx = x - t.x, dy = y - t.y;
+        return dx * dx + dy * dy > 2.2 * 2.2;
       });
       if (clear) break;
     }
-    return Target3D(x, y, z, clock);
+    return TargetCube(x, y, z, clock);
   }
 
-  /// Raycast straight ahead from the crosshair; nearest hit wins.
+  /// Ray-AABB slab test from the crosshair; nearest hit wins.
   void shoot() {
     if (!running || countdown > 0) return;
     flashT = 0.12;
     HapticFeedback.selectionClick();
+    final double cp = math.cos(pitch);
+    final double fx = cp * math.sin(yaw);
+    final double fy = math.sin(pitch);
+    final double fz = cp * math.cos(yaw);
     int best = -1;
-    double bestZ = double.infinity;
+    double bestT = double.infinity;
     for (int i = 0; i < targets.length; i++) {
-      final Target3D t = targets[i];
-      final (double cx, double cyy, double cz) = toCamera(t.x, t.y, t.z);
-      if (cz <= kNearPlane) continue;
-      final double perp = math.sqrt(cx * cx + cyy * cyy);
-      if (perp <= worldRadiusOf(t) && cz < bestZ) {
+      final TargetCube t = targets[i];
+      final double h = halfOf(t);
+      double tmin = -double.infinity, tmax = double.infinity;
+      bool miss = false;
+      for (final (double o, double d) in [(t.x, fx), (t.y, fy), (t.z, fz)]) {
+        if (d.abs() < 1e-9) {
+          if (o - h > 0 || o + h < 0) {
+            miss = true;
+            break;
+          }
+          continue;
+        }
+        double t1 = (o - h) / d, t2 = (o + h) / d;
+        if (t1 > t2) (t1, t2) = (t2, t1);
+        tmin = math.max(tmin, t1);
+        tmax = math.min(tmax, t2);
+      }
+      if (!miss && tmax >= math.max(tmin, 0) && tmin < bestT) {
         best = i;
-        bestZ = cz;
+        bestT = tmin;
       }
     }
     if (best >= 0) {
-      final Target3D t = targets.removeAt(best);
+      final TargetCube t = targets.removeAt(best);
       stats.hits++;
       stats.sumKillMs += (clock - t.born) * 1000;
       stats.score += kHitScore;
@@ -287,8 +341,10 @@ class GameEngine extends ChangeNotifier {
 // presses FIRE. Listener avoids the gesture-arena delay entirely.
 // ---------------------------------------------------------------------------
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key, required this.onFinished});
+  const GameScreen(
+      {super.key, required this.targetColor, required this.onFinished});
 
+  final Color targetColor;
   final void Function(RoundStats) onFinished;
 
   @override
@@ -362,7 +418,7 @@ class _GameScreenState extends State<GameScreen>
       onPointerUp: (e) => _up(e.pointer),
       onPointerCancel: (e) => _up(e.pointer),
       child: CustomPaint(
-        painter: _GamePainter(_game),
+        painter: _GamePainter(_game, widget.targetColor),
         size: Size.infinite,
         willChange: true,
       ),
@@ -401,7 +457,9 @@ class _CachedText {
 }
 
 class _GamePainter extends CustomPainter {
-  _GamePainter(this.game) : super(repaint: game);
+  _GamePainter(this.game, Color targetColor) : super(repaint: game) {
+    _cubeFill.color = targetColor;
+  }
 
   final GameEngine game;
 
@@ -412,21 +470,78 @@ class _GamePainter extends CustomPainter {
     ..style = PaintingStyle.stroke
     ..strokeWidth = 2.5;
   static final Paint _gridPaint = Paint()
-    ..color = kFg.withValues(alpha: 0.20)
+    ..color = kFg.withValues(alpha: 0.13)
     ..style = PaintingStyle.stroke
     ..strokeWidth = 1;
-  static final Paint _bgRing = Paint()
+  static final Paint _edgePaint = Paint()
+    ..color = kFg.withValues(alpha: 0.35)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.5;
+  final Paint _cubeFill = Paint();
+  static final Paint _cubeEdge = Paint()
     ..color = kBg
     ..style = PaintingStyle.stroke
-    ..strokeWidth = 3;
-  static final Paint _bgDot = Paint()..color = kBg;
+    ..strokeWidth = 2
+    ..strokeJoin = StrokeJoin.round;
 
   final _CachedText _scoreText = _CachedText(20);
   final _CachedText _timeText = _CachedText(20);
   final _CachedText _countText = _CachedText(96, weight: FontWeight.w800);
 
+  // The room as world-space line segments: 12 cube edges plus grids on the
+  // floor and the target wall. Built once.
+  static final List<(double, double, double, double, double, double, bool)>
+      _room = _buildRoom();
+
+  static List<(double, double, double, double, double, double, bool)>
+      _buildRoom() {
+    const double w = kRoomHalfW,
+        f = kRoomFloor,
+        c = kRoomCeil,
+        zf = kRoomFront,
+        zb = kRoomBack;
+    final lines = <(double, double, double, double, double, double, bool)>[];
+    // 12 edges of the room cube (drawn brighter).
+    for (final (double y1, double y2) in [(f, f), (c, c)]) {
+      lines.add((-w, y1, zf, w, y2, zf, true));
+      lines.add((-w, y1, zb, w, y2, zb, true));
+      lines.add((-w, y1, zf, -w, y2, zb, true));
+      lines.add((w, y1, zf, w, y2, zb, true));
+    }
+    for (final double x in [-w, w]) {
+      lines.add((x, f, zf, x, c, zf, true));
+      lines.add((x, f, zb, x, c, zb, true));
+    }
+    // Floor grid.
+    for (double x = -w + 2; x <= w - 2 + 1e-9; x += 2) {
+      lines.add((x, f, zf, x, f, zb, false));
+    }
+    for (double z = zf + 3; z < zb; z += 3) {
+      lines.add((-w, f, z, w, f, z, false));
+    }
+    // Target-wall grid.
+    for (double x = -w + 2; x <= w - 2 + 1e-9; x += 2) {
+      lines.add((x, f, zb, x, c, zb, false));
+    }
+    for (double y = f + 2; y < c; y += 2) {
+      lines.add((-w, y, zb, w, y, zb, false));
+    }
+    return lines;
+  }
+
+  // Cube faces: outward normal axis (0=x,1=y,2=z), sign, and the four corner
+  // indices (bit layout: x<<2 | y<<1 | z).
+  static const List<(int, double, int, int, int, int)> _faces = [
+    (0, 1, 4, 5, 7, 6),
+    (0, -1, 0, 1, 3, 2),
+    (1, 1, 2, 3, 7, 6),
+    (1, -1, 0, 1, 5, 4),
+    (2, 1, 1, 3, 7, 5),
+    (2, -1, 0, 2, 6, 4),
+  ];
+
   void _worldLine(Canvas canvas, Size size, double ax, double ay, double az,
-      double bx, double by, double bz) {
+      double bx, double by, double bz, Paint paint) {
     var (x1, y1, z1) = game.toCamera(ax, ay, az);
     var (x2, y2, z2) = game.toCamera(bx, by, bz);
     if (z1 <= kNearPlane && z2 <= kNearPlane) return;
@@ -446,8 +561,40 @@ class _GamePainter extends CustomPainter {
     canvas.drawLine(
       Offset(cx + fo * x1 / z1, cy - fo * y1 / z1),
       Offset(cx + fo * x2 / z2, cy - fo * y2 / z2),
-      _gridPaint,
+      paint,
     );
+  }
+
+  void _paintCube(Canvas canvas, Size size, TargetCube t) {
+    final double h = game.halfOf(t);
+    if (h <= 0.01) return;
+    final List<Offset> pts = List.filled(8, Offset.zero);
+    final double cx = size.width / 2, cy = size.height / 2, fo = game.focal;
+    for (int i = 0; i < 8; i++) {
+      final double wx = t.x + ((i & 4) != 0 ? h : -h);
+      final double wy = t.y + ((i & 2) != 0 ? h : -h);
+      final double wz = t.z + ((i & 1) != 0 ? h : -h);
+      final (double px, double py, double pz) = game.toCamera(wx, wy, wz);
+      if (pz <= kNearPlane) return; // cube partly behind camera: skip
+      pts[i] = Offset(cx + fo * px / pz, cy - fo * py / pz);
+    }
+    for (final (int axis, double sign, int a, int b, int c, int d) in _faces) {
+      // Visible when the camera (at the origin) is on the normal's side.
+      final double centerOnAxis = switch (axis) {
+        0 => t.x,
+        1 => t.y,
+        _ => t.z,
+      };
+      if (sign * centerOnAxis + h >= 0) continue;
+      final Path face = Path()
+        ..moveTo(pts[a].dx, pts[a].dy)
+        ..lineTo(pts[b].dx, pts[b].dy)
+        ..lineTo(pts[c].dx, pts[c].dy)
+        ..lineTo(pts[d].dx, pts[d].dy)
+        ..close();
+      canvas.drawPath(face, _cubeFill);
+      canvas.drawPath(face, _cubeEdge);
+    }
   }
 
   @override
@@ -455,12 +602,11 @@ class _GamePainter extends CustomPainter {
     game.arena = size;
     canvas.drawRect(Offset.zero & size, _bgPaint);
 
-    // Wireframe floor grid (y = -1.8 plane) — anchors the 3D feel.
-    for (double z = 2; z <= 26; z += 3) {
-      _worldLine(canvas, size, -24, -1.8, z, 24, -1.8, z);
-    }
-    for (double x = -24; x <= 24; x += 3) {
-      _worldLine(canvas, size, x, -1.8, 2, x, -1.8, 26);
+    // The room: grids dim, cube-room edges brighter.
+    for (final (double ax, double ay, double az, double bx, double by,
+        double bz, bool edge) in _room) {
+      _worldLine(canvas, size, ax, ay, az, bx, by, bz,
+          edge ? _edgePaint : _gridPaint);
     }
 
     final double cx = size.width / 2, cy = size.height / 2;
@@ -472,27 +618,27 @@ class _GamePainter extends CustomPainter {
       return;
     }
 
-    // Targets, far-to-near so closer ones draw on top.
-    final List<(double, double, double, double)> projected = [];
-    for (final Target3D t in game.targets) {
-      final (double px, double py, double pz) = game.toCamera(t.x, t.y, t.z);
-      if (pz <= kNearPlane) continue;
-      final double r = game.focal * game.worldRadiusOf(t) / pz;
-      if (r <= 0.5) continue;
-      projected.add((cx + game.focal * px / pz, cy - game.focal * py / pz, r, pz));
-    }
-    projected.sort((a, b) => b.$4.compareTo(a.$4));
-    for (final (double sx, double sy, double r, _) in projected) {
-      final Offset c = Offset(sx, sy);
-      canvas.drawCircle(c, r, _fgFill);
-      canvas.drawCircle(c, r * 0.62, _bgRing);
-      canvas.drawCircle(c, r * 0.18, _bgDot);
+    // Targets, far-to-near (they share a wall plane, so center-distance
+    // ordering is fine).
+    final List<TargetCube> ordered = List.of(game.targets)
+      ..sort((a, b) {
+        final double da = a.x * a.x + a.y * a.y + a.z * a.z;
+        final double db = b.x * b.x + b.y * b.y + b.z * b.z;
+        return db.compareTo(da);
+      });
+    for (final TargetCube t in ordered) {
+      _paintCube(canvas, size, t);
     }
 
     // Crosshair: center dot + four ticks with a gap.
     final Offset center = Offset(cx, cy);
     canvas.drawCircle(center, 2.2, _fgFill);
-    for (final (double dx, double dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)]) {
+    for (final (double dx, double dy) in [
+      (1.0, 0.0),
+      (-1.0, 0.0),
+      (0.0, 1.0),
+      (0.0, -1.0)
+    ]) {
       final Offset dir = Offset(dx, dy);
       canvas.drawLine(center + dir * 7, center + dir * 17, _fgStroke);
     }
@@ -503,7 +649,12 @@ class _GamePainter extends CustomPainter {
       canvas.drawCircle(center, 14 + k * 12, _fgStroke);
     }
     if (game.hitT > 0) {
-      for (final (double dx, double dy) in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)]) {
+      for (final (double dx, double dy) in [
+        (1.0, 1.0),
+        (-1.0, 1.0),
+        (1.0, -1.0),
+        (-1.0, -1.0)
+      ]) {
         final Offset dir = Offset(dx, dy) / math.sqrt2;
         canvas.drawLine(center + dir * 9, center + dir * 19, _fgStroke);
       }
@@ -532,7 +683,9 @@ class _GamePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_GamePainter oldDelegate) => oldDelegate.game != game;
+  bool shouldRepaint(_GamePainter oldDelegate) =>
+      oldDelegate.game != game ||
+      oldDelegate._cubeFill.color != _cubeFill.color;
 }
 
 // ---------------------------------------------------------------------------
@@ -561,10 +714,19 @@ TextStyle _fgStyle(double size,
     );
 
 class _MenuScreen extends StatelessWidget {
-  const _MenuScreen({required this.best, required this.onStart});
+  const _MenuScreen({
+    required this.best,
+    required this.scenario,
+    required this.onScenario,
+    required this.onStart,
+    required this.onSettings,
+  });
 
   final int best;
+  final int scenario;
+  final ValueChanged<int> onScenario;
   final VoidCallback onStart;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -578,16 +740,101 @@ class _MenuScreen extends StatelessWidget {
               style: _fgStyle(34, weight: FontWeight.w800, spacing: 8)),
           const SizedBox(height: 10),
           Text('BEST  $best', style: _fgStyle(16)),
-          const SizedBox(height: 48),
+          const SizedBox(height: 36),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                onPressed: () => onScenario(
+                    (scenario - 1 + kScenarios.length) % kScenarios.length),
+                icon: const Icon(Icons.chevron_left, color: kFg),
+              ),
+              SizedBox(
+                width: 160,
+                child: Text(
+                  kScenarios[scenario],
+                  textAlign: TextAlign.center,
+                  style: _fgStyle(18, spacing: 6),
+                ),
+              ),
+              IconButton(
+                onPressed: () =>
+                    onScenario((scenario + 1) % kScenarios.length),
+                icon: const Icon(Icons.chevron_right, color: kFg),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
           OutlinedButton(
             style: _buttonStyle(),
             onPressed: onStart,
             child: const Text('START'),
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 16),
+          TextButton(
+            onPressed: onSettings,
+            child: Text('SETTINGS',
+                style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+          ),
+          const SizedBox(height: 24),
           Text(
             'SWIPE TO AIM — TAP FIRE TO SHOOT',
             style: _fgStyle(12, weight: FontWeight.w400, spacing: 3),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsScreen extends StatelessWidget {
+  const _SettingsScreen({
+    required this.selected,
+    required this.onPick,
+    required this.onBack,
+  });
+
+  final Color selected;
+  final ValueChanged<Color> onPick;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('SETTINGS', style: _fgStyle(24, spacing: 8)),
+          const SizedBox(height: 40),
+          Text('TARGET COLOR',
+              style: _fgStyle(14, weight: FontWeight.w400, spacing: 4)),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 14,
+            runSpacing: 14,
+            children: [
+              for (final Color c in kTargetColors)
+                GestureDetector(
+                  onTap: () => onPick(c),
+                  child: Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: c,
+                      border: Border.all(
+                        color: c == selected ? kFg : kFg.withValues(alpha: .25),
+                        width: c == selected ? 3 : 1,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 48),
+          OutlinedButton(
+            style: _buttonStyle(),
+            onPressed: onBack,
+            child: const Text('BACK'),
           ),
         ],
       ),
