@@ -24,10 +24,8 @@ const List<Color> kTargetColors = [
 
 // Gameplay tuning.
 const double kRoundSeconds = 30;
-const int kMaxTargets = 2;
-const double kTargetLife = 3.5; // seconds from spawn to expiry
+const int kMaxTargets = 3;
 const double kGrowTime = 0.25;
-const double kShrinkTime = 1.2;
 const int kHitScore = 100;
 const int kMissPenalty = 25;
 
@@ -242,13 +240,6 @@ class GameEngine extends ChangeNotifier {
       return;
     }
     clock += dt;
-    targets.removeWhere((t) {
-      if (clock - t.born > kTargetLife) {
-        stats.misses++;
-        return true;
-      }
-      return false;
-    });
     if (arena != Size.zero) {
       while (targets.length < kMaxTargets) {
         targets.add(_spawn());
@@ -261,13 +252,12 @@ class GameEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Grow-in / shrink-out lifetime profile applied to the cube half-extent.
+  /// Quick grow-in on spawn; targets then live until shot.
   double halfOf(TargetCube t) {
     final double age = clock - t.born;
     final double grow =
         Curves.easeOutBack.transform((age / kGrowTime).clamp(0.0, 1.0));
-    final double shrink = ((kTargetLife - age) / kShrinkTime).clamp(0.0, 1.0);
-    return kCubeHalf * grow * shrink;
+    return kCubeHalf * grow;
   }
 
   /// Cubes spawn against the wall opposite the player.
