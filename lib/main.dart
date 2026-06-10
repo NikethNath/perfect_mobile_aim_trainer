@@ -78,6 +78,85 @@ enum _Screen { menu, settings, playing, results }
 
 const List<String> kScenarios = ['CUBES'];
 
+const List<Color> kBorderColors = [Color(0xFF000000), ...kTargetColors];
+
+class AppSettings {
+  Color targetColor = kFg;
+  Color crosshairColor = kFg;
+  double crosshairDot = 2.2; // center dot radius (px); 0 removes it
+  double crosshairLength = 10; // length of the 4 lines (px); 0 removes them
+  double crosshairWidth = 2.5; // stroke width of the 4 lines (px)
+  double crosshairBorder = 0; // outline thickness (px); 0 removes it
+  Color crosshairBorderColor = const Color(0xFF000000);
+  double sensitivity = 1.0;
+
+  Future<void> load() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    targetColor = Color(prefs.getInt('target_color') ?? kFg.toARGB32());
+    crosshairColor = Color(prefs.getInt('crosshair_color') ?? kFg.toARGB32());
+    crosshairDot = prefs.getDouble('crosshair_dot') ?? 2.2;
+    crosshairLength = prefs.getDouble('crosshair_length') ?? 10;
+    crosshairWidth = prefs.getDouble('crosshair_width') ?? 2.5;
+    crosshairBorder = prefs.getDouble('crosshair_border') ?? 0;
+    crosshairBorderColor =
+        Color(prefs.getInt('crosshair_border_color') ?? 0xFF000000);
+    sensitivity = prefs.getDouble('sensitivity') ?? 1.0;
+  }
+
+  Future<void> save() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('target_color', targetColor.toARGB32());
+    await prefs.setInt('crosshair_color', crosshairColor.toARGB32());
+    await prefs.setDouble('crosshair_dot', crosshairDot);
+    await prefs.setDouble('crosshair_length', crosshairLength);
+    await prefs.setDouble('crosshair_width', crosshairWidth);
+    await prefs.setDouble('crosshair_border', crosshairBorder);
+    await prefs.setInt(
+        'crosshair_border_color', crosshairBorderColor.toARGB32());
+    await prefs.setDouble('sensitivity', sensitivity);
+  }
+}
+
+/// Shared crosshair renderer used by the game HUD and the settings preview.
+/// Border is drawn first as a fatter pass underneath the main color.
+void drawCrosshair(Canvas canvas, Offset center, AppSettings s) {
+  const double gap = 6;
+  final double thick = s.crosshairWidth;
+  final double len = s.crosshairLength;
+  final double dotR = s.crosshairDot;
+  final double bw = s.crosshairBorder;
+
+  if (len > 0.1) {
+    final Paint stroke = Paint()
+      ..color = s.crosshairColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = thick;
+    final Paint border = Paint()
+      ..color = s.crosshairBorderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = thick + 2 * bw;
+    for (final (double dx, double dy) in [
+      (1.0, 0.0),
+      (-1.0, 0.0),
+      (0.0, 1.0),
+      (0.0, -1.0)
+    ]) {
+      final Offset dir = Offset(dx, dy);
+      if (bw > 0.05) {
+        canvas.drawLine(center + dir * (gap - bw),
+            center + dir * (gap + len + bw), border);
+      }
+      canvas.drawLine(center + dir * gap, center + dir * (gap + len), stroke);
+    }
+  }
+  if (dotR > 0.1) {
+    if (bw > 0.05) {
+      canvas.drawCircle(center, dotR + bw, Paint()..color = s.crosshairBorderColor);
+    }
+    canvas.drawCircle(center, dotR, Paint()..color = s.crosshairColor);
+  }
+}
+
 class RoundStats {
   int hits = 0;
   int misses = 0;
@@ -97,23 +176,22 @@ class HomeFlow extends StatefulWidget {
 
 class _HomeFlowState extends State<HomeFlow> {
   static const String _bestKey = 'best_score';
-  static const String _colorKey = 'target_color';
 
+  final AppSettings _settings = AppSettings();
   _Screen _screen = _Screen.menu;
   RoundStats? _last;
   int _best = 0;
   int _scenario = 0;
-  Color _targetColor = kFg;
 
   @override
   void initState() {
     super.initState();
     SharedPreferences.getInstance().then((prefs) {
       if (!mounted) return;
-      setState(() {
-        _best = prefs.getInt(_bestKey) ?? 0;
-        _targetColor = Color(prefs.getInt(_colorKey) ?? kFg.toARGB32());
-      });
+      setState(() => _best = prefs.getInt(_bestKey) ?? 0);
+    });
+    _settings.load().then((_) {
+      if (mounted) setState(() {});
     });
   }
 
@@ -129,12 +207,6 @@ class _HomeFlowState extends State<HomeFlow> {
     });
   }
 
-  void _pickColor(Color c) {
-    setState(() => _targetColor = c);
-    SharedPreferences.getInstance()
-        .then((prefs) => prefs.setInt(_colorKey, c.toARGB32()));
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -147,12 +219,15 @@ class _HomeFlowState extends State<HomeFlow> {
             onSettings: () => setState(() => _screen = _Screen.settings),
           ),
         _Screen.settings => _SettingsScreen(
-            selected: _targetColor,
-            onPick: _pickColor,
+            settings: _settings,
+            onChanged: () {
+              setState(() {});
+              _settings.save();
+            },
             onBack: () => setState(() => _screen = _Screen.menu),
           ),
         _Screen.playing => GameScreen(
-            targetColor: _targetColor,
+            settings: _settings,
             onFinished: _onRoundFinished,
           ),
         _Screen.results => _ResultsScreen(
@@ -195,6 +270,7 @@ class GameEngine extends ChangeNotifier {
   // First-person camera at the origin, starting square at the target wall.
   double yaw = 0;
   double pitch = 0;
+  double sensitivity = 1.0;
 
   // Transient feedback timers (seconds remaining).
   double flashT = 0; // muzzle ring after any shot
@@ -214,8 +290,9 @@ class GameEngine extends ChangeNotifier {
 
   void look(Offset delta) {
     if (!running) return;
-    yaw += delta.dx * kLookSens;
-    pitch = (pitch - delta.dy * kLookSens).clamp(-kPitchLimit, kPitchLimit);
+    final double s = kLookSens * sensitivity;
+    yaw += delta.dx * s;
+    pitch = (pitch - delta.dy * s).clamp(-kPitchLimit, kPitchLimit);
     notifyListeners();
   }
 
@@ -332,9 +409,9 @@ class GameEngine extends ChangeNotifier {
 // ---------------------------------------------------------------------------
 class GameScreen extends StatefulWidget {
   const GameScreen(
-      {super.key, required this.targetColor, required this.onFinished});
+      {super.key, required this.settings, required this.onFinished});
 
-  final Color targetColor;
+  final AppSettings settings;
   final void Function(RoundStats) onFinished;
 
   @override
@@ -354,7 +431,8 @@ class _GameScreenState extends State<GameScreen>
   @override
   void initState() {
     super.initState();
-    _game = GameEngine(onFinished: widget.onFinished);
+    _game = GameEngine(onFinished: widget.onFinished)
+      ..sensitivity = widget.settings.sensitivity;
     _ticker = createTicker(_tick)..start();
   }
 
@@ -408,7 +486,7 @@ class _GameScreenState extends State<GameScreen>
       onPointerUp: (e) => _up(e.pointer),
       onPointerCancel: (e) => _up(e.pointer),
       child: CustomPaint(
-        painter: _GamePainter(_game, widget.targetColor),
+        painter: _GamePainter(_game, widget.settings),
         size: Size.infinite,
         willChange: true,
       ),
@@ -447,11 +525,17 @@ class _CachedText {
 }
 
 class _GamePainter extends CustomPainter {
-  _GamePainter(this.game, Color targetColor) : super(repaint: game) {
-    _cubeFill.color = targetColor;
+  _GamePainter(this.game, this.settings) : super(repaint: game) {
+    _cubeFill.color = settings.targetColor;
+    _fxStroke
+      ..color = settings.crosshairColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
   }
 
   final GameEngine game;
+  final AppSettings settings;
+  final Paint _fxStroke = Paint();
 
   static final Paint _bgPaint = Paint()..color = kBg;
   static final Paint _fgFill = Paint()..color = kFg;
@@ -620,23 +704,14 @@ class _GamePainter extends CustomPainter {
       _paintCube(canvas, size, t);
     }
 
-    // Crosshair: center dot + four ticks with a gap.
+    // Crosshair per player settings.
     final Offset center = Offset(cx, cy);
-    canvas.drawCircle(center, 2.2, _fgFill);
-    for (final (double dx, double dy) in [
-      (1.0, 0.0),
-      (-1.0, 0.0),
-      (0.0, 1.0),
-      (0.0, -1.0)
-    ]) {
-      final Offset dir = Offset(dx, dy);
-      canvas.drawLine(center + dir * 7, center + dir * 17, _fgStroke);
-    }
+    drawCrosshair(canvas, center, settings);
 
     // Muzzle ring after a shot; X-shaped hit marker after a kill.
     if (game.flashT > 0) {
       final double k = 1 - game.flashT / 0.12;
-      canvas.drawCircle(center, 14 + k * 12, _fgStroke);
+      canvas.drawCircle(center, 14 + k * 12, _fxStroke);
     }
     if (game.hitT > 0) {
       for (final (double dx, double dy) in [
@@ -646,7 +721,7 @@ class _GamePainter extends CustomPainter {
         (-1.0, -1.0)
       ]) {
         final Offset dir = Offset(dx, dy) / math.sqrt2;
-        canvas.drawLine(center + dir * 9, center + dir * 19, _fgStroke);
+        canvas.drawLine(center + dir * 9, center + dir * 19, _fxStroke);
       }
     }
 
@@ -779,57 +854,198 @@ class _MenuScreen extends StatelessWidget {
 
 class _SettingsScreen extends StatelessWidget {
   const _SettingsScreen({
-    required this.selected,
-    required this.onPick,
+    required this.settings,
+    required this.onChanged,
     required this.onBack,
   });
 
-  final Color selected;
-  final ValueChanged<Color> onPick;
+  final AppSettings settings;
+  final VoidCallback onChanged;
   final VoidCallback onBack;
 
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('SETTINGS', style: _fgStyle(24, spacing: 8)),
-          const SizedBox(height: 40),
-          Text('TARGET COLOR',
-              style: _fgStyle(14, weight: FontWeight.w400, spacing: 4)),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 14,
-            runSpacing: 14,
-            children: [
-              for (final Color c in kTargetColors)
-                GestureDetector(
-                  onTap: () => onPick(c),
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: c,
-                      border: Border.all(
-                        color: c == selected ? kFg : kFg.withValues(alpha: .25),
-                        width: c == selected ? 3 : 1,
-                      ),
-                    ),
-                  ),
+  Widget _label(String s) =>
+      Text(s, style: _fgStyle(13, weight: FontWeight.w400, spacing: 4));
+
+  Widget _swatches(Color selected, ValueChanged<Color> pick,
+      {List<Color> palette = kTargetColors}) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      alignment: WrapAlignment.center,
+      children: [
+        for (final Color c in palette)
+          GestureDetector(
+            onTap: () => pick(c),
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: c,
+                border: Border.all(
+                  color: c == selected ? kFg : kFg.withValues(alpha: .25),
+                  width: c == selected ? 3 : 1,
                 ),
-            ],
+              ),
+            ),
           ),
-          const SizedBox(height: 48),
-          OutlinedButton(
-            style: _buttonStyle(),
-            onPressed: onBack,
-            child: const Text('BACK'),
-          ),
-        ],
+      ],
+    );
+  }
+
+  Widget _slider(
+      double value, double min, double max, ValueChanged<double> set) {
+    return SliderTheme(
+      data: SliderThemeData(
+        activeTrackColor: kFg,
+        inactiveTrackColor: kFg.withValues(alpha: .2),
+        thumbColor: kFg,
+        overlayColor: kFg.withValues(alpha: .12),
+        trackHeight: 2,
+      ),
+      child: Slider(value: value, min: min, max: max, onChanged: set),
+    );
+  }
+
+  Widget _sliderRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [_label(label), Text(value, style: _fgStyle(13))],
       ),
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Column(
+              children: [
+                const SizedBox(height: 28),
+                Text('SETTINGS', style: _fgStyle(24, spacing: 8)),
+                const SizedBox(height: 20),
+                // Live crosshair preview.
+                Container(
+                  width: 200,
+                  height: 76,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: kFg.withValues(alpha: .25)),
+                  ),
+                  child: CustomPaint(
+                    painter: _CrosshairPreviewPainter(
+                      settings.crosshairColor,
+                      settings.crosshairDot,
+                      settings.crosshairLength,
+                      settings.crosshairWidth,
+                      settings.crosshairBorder,
+                      settings.crosshairBorderColor,
+                      settings,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                _label('TARGET COLOR'),
+                const SizedBox(height: 10),
+                _swatches(settings.targetColor, (c) {
+                  settings.targetColor = c;
+                  onChanged();
+                }),
+                const SizedBox(height: 24),
+                _label('CROSSHAIR COLOR'),
+                const SizedBox(height: 10),
+                _swatches(settings.crosshairColor, (c) {
+                  settings.crosshairColor = c;
+                  onChanged();
+                }),
+                const SizedBox(height: 24),
+                _label('CROSSHAIR BORDER COLOR'),
+                const SizedBox(height: 10),
+                _swatches(settings.crosshairBorderColor, (c) {
+                  settings.crosshairBorderColor = c;
+                  onChanged();
+                }, palette: kBorderColors),
+                const SizedBox(height: 24),
+                _sliderRow(
+                    'CENTER DOT SIZE', settings.crosshairDot.toStringAsFixed(1)),
+                _slider(settings.crosshairDot, 0, 8, (v) {
+                  settings.crosshairDot = v;
+                  onChanged();
+                }),
+                const SizedBox(height: 12),
+                _sliderRow('CROSSHAIR LENGTH',
+                    settings.crosshairLength.toStringAsFixed(0)),
+                _slider(settings.crosshairLength, 0, 30, (v) {
+                  settings.crosshairLength = v;
+                  onChanged();
+                }),
+                const SizedBox(height: 12),
+                _sliderRow('CROSSHAIR WIDTH',
+                    settings.crosshairWidth.toStringAsFixed(1)),
+                _slider(settings.crosshairWidth, 1, 8, (v) {
+                  settings.crosshairWidth = v;
+                  onChanged();
+                }),
+                const SizedBox(height: 12),
+                _sliderRow('BORDER THICKNESS',
+                    settings.crosshairBorder.toStringAsFixed(1)),
+                _slider(settings.crosshairBorder, 0, 4, (v) {
+                  settings.crosshairBorder = v;
+                  onChanged();
+                }),
+                const SizedBox(height: 12),
+                _sliderRow('SENSITIVITY',
+                    '${settings.sensitivity.toStringAsFixed(1)}X'),
+                _slider(settings.sensitivity, 0.4, 2.4, (v) {
+                  settings.sensitivity = v;
+                  onChanged();
+                }),
+                const SizedBox(height: 28),
+                OutlinedButton(
+                  style: _buttonStyle(),
+                  onPressed: onBack,
+                  child: const Text('BACK'),
+                ),
+                const SizedBox(height: 28),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CrosshairPreviewPainter extends CustomPainter {
+  // The value fields exist only so shouldRepaint can detect changes to the
+  // (mutable, shared) settings object between frames.
+  _CrosshairPreviewPainter(this.color, this.dot, this.length, this.width,
+      this.border, this.borderColor, this.settings);
+
+  final Color color;
+  final double dot;
+  final double length;
+  final double width;
+  final double border;
+  final Color borderColor;
+  final AppSettings settings;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    drawCrosshair(canvas, size.center(Offset.zero), settings);
+  }
+
+  @override
+  bool shouldRepaint(_CrosshairPreviewPainter oldDelegate) =>
+      oldDelegate.color != color ||
+      oldDelegate.dot != dot ||
+      oldDelegate.length != length ||
+      oldDelegate.width != width ||
+      oldDelegate.border != border ||
+      oldDelegate.borderColor != borderColor;
 }
 
 class _ResultsScreen extends StatelessWidget {
