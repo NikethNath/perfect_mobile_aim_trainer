@@ -27,8 +27,6 @@ const List<Color> kTargetColors = [
 const double kRoundSeconds = 60;
 const int kMaxTargets = 3;
 const double kGrowTime = 0.1;
-const int kHitScore = 100;
-const int kMissPenalty = 25;
 
 // 3D tuning.
 const double kCubeHalf = 0.5; // target cube half-extent (world units)
@@ -81,6 +79,7 @@ class AimTrainerApp extends StatelessWidget {
 // ---------------------------------------------------------------------------
 enum _Screen {
   menu,
+  profile,
   settings,
   settingsCrosshair,
   settingsColors,
@@ -213,11 +212,186 @@ void drawCrosshair(Canvas canvas, Offset center, AppSettings s) {
 class RoundStats {
   int hits = 0;
   int misses = 0;
-  int score = 0;
   double sumKillMs = 0;
 
   double get accuracy => hits + misses == 0 ? 0 : hits / (hits + misses);
   double get avgKillMs => hits == 0 ? 0 : sumKillMs / hits;
+
+  /// Score formula: hits weighted by the square root of accuracy.
+  int get score => (hits * math.sqrt(accuracy)).round();
+}
+
+// ---------------------------------------------------------------------------
+// Rank ladder. Thresholds are on the hits*sqrt(accuracy) score.
+// ---------------------------------------------------------------------------
+class Rank {
+  const Rank(this.name, this.threshold, this.color);
+
+  final String name;
+  final int threshold;
+  final Color color;
+}
+
+const List<Rank> kRanks = [
+  Rank('CADET', 25, Color(0xFF9BA8A0)),
+  Rank('BRONZE', 50, Color(0xFFCD7F32)),
+  Rank('SILVER', 85, Color(0xFFC8CDD4)),
+  Rank('GOLD', 135, Color(0xFFFFD24A)),
+  Rank('PLATINUM', 195, Color(0xFF5CE1E6)),
+  Rank('MASTER', 265, Color(0xFFB57BFF)),
+  Rank('GRANDMASTER', 330, Color(0xFFFF5C5C)),
+  Rank('CELESTIAL', 400, Color(0xFFEFFBFF)),
+];
+
+/// Highest rank whose threshold the score meets, or null when unranked.
+Rank? rankFor(int score) {
+  Rank? earned;
+  for (final Rank r in kRanks) {
+    if (score >= r.threshold) earned = r;
+  }
+  return earned;
+}
+
+/// Next rank above the score, or null at the top.
+Rank? nextRankFor(int score) {
+  for (final Rank r in kRanks) {
+    if (score < r.threshold) return r;
+  }
+  return null;
+}
+
+/// Procedural rank insignia — one geometric badge per tier, drawn in the
+/// rank's color. No image assets; crisp at any size.
+class RankBadge extends StatelessWidget {
+  const RankBadge({super.key, required this.rank, this.size = 56});
+
+  final Rank? rank; // null renders the unranked placeholder
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _RankBadgePainter(rank),
+    );
+  }
+}
+
+class _RankBadgePainter extends CustomPainter {
+  _RankBadgePainter(this.rank);
+
+  final Rank? rank;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Offset c = size.center(Offset.zero);
+    final double r = size.shortestSide / 2;
+
+    if (rank == null) {
+      // Unranked: dashed circle.
+      final Paint p = Paint()
+        ..color = kFg.withValues(alpha: .3)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = math.max(1.5, r * 0.07);
+      final Rect rect = Rect.fromCircle(center: c, radius: r * 0.7);
+      for (int i = 0; i < 12; i++) {
+        canvas.drawArc(rect, i * math.pi / 6, math.pi / 9, false, p);
+      }
+      return;
+    }
+
+    final Color col = rank!.color;
+    final Paint fill = Paint()..color = col;
+    final Paint stroke = Paint()
+      ..color = col
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(2, r * 0.13)
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    switch (kRanks.indexOf(rank!)) {
+      case 0: // Cadet: one chevron
+        _chevrons(canvas, c, r, 1, stroke);
+      case 1: // Bronze: two chevrons
+        _chevrons(canvas, c, r, 2, stroke);
+      case 2: // Silver: three chevrons
+        _chevrons(canvas, c, r, 3, stroke);
+      case 3: // Gold: diamond
+        _diamond(canvas, c, r, fill, stroke);
+      case 4: // Platinum: winged diamond
+        _diamond(canvas, c, r * 0.82, fill, stroke);
+        for (final double s in [-1, 1]) {
+          final Path wing = Path()
+            ..moveTo(c.dx + s * r * 0.55, c.dy + r * 0.30)
+            ..lineTo(c.dx + s * r * 0.92, c.dy)
+            ..lineTo(c.dx + s * r * 0.55, c.dy - r * 0.30);
+          canvas.drawPath(wing, stroke);
+        }
+      case 5: // Master: star
+        canvas.drawPath(_star(c, r * 0.72), fill);
+      case 6: // Grandmaster: star in a ring
+        canvas.drawPath(_star(c, r * 0.52), fill);
+        canvas.drawCircle(c, r * 0.78, stroke);
+      case 7: // Celestial: radiant star in a ring
+        canvas.drawPath(_star(c, r * 0.42), fill);
+        canvas.drawCircle(c, r * 0.62, stroke);
+        final Paint ray = Paint()
+          ..color = col
+          ..strokeWidth = math.max(1.5, r * 0.08)
+          ..strokeCap = StrokeCap.round;
+        for (int i = 0; i < 8; i++) {
+          final double a = i * math.pi / 4 + math.pi / 8;
+          final Offset dir = Offset(math.cos(a), math.sin(a));
+          canvas.drawLine(c + dir * r * 0.74, c + dir * r * 0.95, ray);
+        }
+    }
+  }
+
+  static void _chevrons(
+      Canvas canvas, Offset c, double r, int n, Paint stroke) {
+    final double step = r * 0.38;
+    final double top = c.dy - (n - 1) * step / 2 - r * 0.12;
+    for (int i = 0; i < n; i++) {
+      final double y = top + i * step;
+      final Path chevron = Path()
+        ..moveTo(c.dx - r * 0.55, y + r * 0.22)
+        ..lineTo(c.dx, y - r * 0.18)
+        ..lineTo(c.dx + r * 0.55, y + r * 0.22);
+      canvas.drawPath(chevron, stroke);
+    }
+  }
+
+  static void _diamond(
+      Canvas canvas, Offset c, double r, Paint fill, Paint stroke) {
+    Path rhombus(double k) => Path()
+      ..moveTo(c.dx, c.dy - r * 0.72 * k)
+      ..lineTo(c.dx + r * 0.52 * k, c.dy)
+      ..lineTo(c.dx, c.dy + r * 0.72 * k)
+      ..lineTo(c.dx - r * 0.52 * k, c.dy)
+      ..close();
+    canvas.drawPath(rhombus(1), stroke);
+    canvas.drawPath(rhombus(0.45), fill);
+  }
+
+  static Path _star(Offset c, double r) {
+    final Path path = Path();
+    for (int i = 0; i < 10; i++) {
+      final double radius = i.isEven ? r : r * 0.42;
+      final double a = -math.pi / 2 + i * math.pi / 5;
+      final Offset p = c + Offset(math.cos(a), math.sin(a)) * radius;
+      if (i == 0) {
+        path.moveTo(p.dx, p.dy);
+      } else {
+        path.lineTo(p.dx, p.dy);
+      }
+    }
+    path.close();
+    return path;
+  }
+
+  @override
+  bool shouldRepaint(_RankBadgePainter oldDelegate) =>
+      oldDelegate.rank != rank;
 }
 
 class HomeFlow extends StatefulWidget {
@@ -228,21 +402,25 @@ class HomeFlow extends StatefulWidget {
 }
 
 class _HomeFlowState extends State<HomeFlow> {
-  static const String _bestKey = 'best_score';
-
   final AppSettings _settings = AppSettings();
   _Screen _screen = _Screen.menu;
   RoundStats? _last;
-  int _best = 0;
+  final Map<int, int> _bests = {}; // best score per scenario index
   int _scenario = 0;
   int _round = 0; // bumped to force a fresh GameScreen on restart
+
+  int get _best => _bests[_scenario] ?? 0;
 
   @override
   void initState() {
     super.initState();
     SharedPreferences.getInstance().then((prefs) {
       if (!mounted) return;
-      setState(() => _best = prefs.getInt(_bestKey) ?? 0);
+      setState(() {
+        for (int i = 0; i < kScenarios.length; i++) {
+          _bests[i] = prefs.getInt('best_${kScenarios[i]}') ?? 0;
+        }
+      });
     });
     _settings.load().then((_) {
       if (mounted) setState(() {});
@@ -256,9 +434,9 @@ class _HomeFlowState extends State<HomeFlow> {
 
   void _onRoundFinished(RoundStats stats) {
     if (stats.score > _best) {
-      _best = stats.score;
-      SharedPreferences.getInstance()
-          .then((prefs) => prefs.setInt(_bestKey, _best));
+      _bests[_scenario] = stats.score;
+      SharedPreferences.getInstance().then((prefs) =>
+          prefs.setInt('best_${kScenarios[_scenario]}', stats.score));
     }
     setState(() {
       _last = stats;
@@ -275,7 +453,12 @@ class _HomeFlowState extends State<HomeFlow> {
             scenario: _scenario,
             onScenario: (i) => setState(() => _scenario = i),
             onStart: () => setState(() => _screen = _Screen.playing),
+            onProfile: () => setState(() => _screen = _Screen.profile),
             onSettings: () => setState(() => _screen = _Screen.settings),
+          ),
+        _Screen.profile => _ProfileScreen(
+            bests: _bests,
+            onBack: () => setState(() => _screen = _Screen.menu),
           ),
         _Screen.settings => _SettingsScreen(
             onCrosshair: () =>
@@ -492,13 +675,11 @@ class GameEngine extends ChangeNotifier {
       final TargetCube t = targets.removeAt(best);
       stats.hits++;
       stats.sumKillMs += (clock - t.born) * 1000;
-      stats.score += kHitScore;
       hitT = 0.18;
       HapticFeedback.lightImpact();
       targets.add(_spawn());
     } else {
       stats.misses++;
-      stats.score = math.max(0, stats.score - kMissPenalty);
     }
     notifyListeners();
   }
@@ -1071,6 +1252,7 @@ class _MenuScreen extends StatelessWidget {
     required this.scenario,
     required this.onScenario,
     required this.onStart,
+    required this.onProfile,
     required this.onSettings,
   });
 
@@ -1078,6 +1260,7 @@ class _MenuScreen extends StatelessWidget {
   final int scenario;
   final ValueChanged<int> onScenario;
   final VoidCallback onStart;
+  final VoidCallback onProfile;
   final VoidCallback onSettings;
 
   @override
@@ -1091,7 +1274,14 @@ class _MenuScreen extends StatelessWidget {
           Text('AIM TRAINER',
               style: _fgStyle(34, weight: FontWeight.w800, spacing: 8)),
           const SizedBox(height: 10),
-          Text('BEST  $best', style: _fgStyle(16)),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              RankBadge(rank: rankFor(best), size: 24),
+              const SizedBox(width: 10),
+              Text('BEST  $best', style: _fgStyle(16)),
+            ],
+          ),
           const SizedBox(height: 36),
           Row(
             mainAxisSize: MainAxisSize.min,
@@ -1123,10 +1313,21 @@ class _MenuScreen extends StatelessWidget {
             child: const Text('START'),
           ),
           const SizedBox(height: 16),
-          TextButton(
-            onPressed: onSettings,
-            child: Text('SETTINGS',
-                style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton(
+                onPressed: onProfile,
+                child: Text('PROFILE',
+                    style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+              ),
+              const SizedBox(width: 16),
+              TextButton(
+                onPressed: onSettings,
+                child: Text('SETTINGS',
+                    style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+              ),
+            ],
           ),
           const SizedBox(height: 24),
           Text(
@@ -1747,37 +1948,73 @@ class _ResultsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool isBest = stats.score >= best && stats.score > 0;
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(isBest ? 'NEW BEST' : 'ROUND OVER',
-              style: _fgStyle(20, spacing: 6)),
-          const SizedBox(height: 8),
-          Text('${stats.score}', style: _fgStyle(72, weight: FontWeight.w800)),
-          const SizedBox(height: 32),
-          _statRow('HITS', '${stats.hits}'),
-          _statRow('MISSES', '${stats.misses}'),
-          _statRow('ACCURACY', '${(stats.accuracy * 100).toStringAsFixed(0)}%'),
-          _statRow('AVG KILL', '${stats.avgKillMs.toStringAsFixed(0)} MS'),
-          const SizedBox(height: 40),
-          Row(
+    final Rank? rank = rankFor(stats.score);
+    final Rank? next = nextRankFor(stats.score);
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Center(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              OutlinedButton(
-                style: _buttonStyle(),
-                onPressed: onReplay,
-                child: const Text('AGAIN'),
+              const SizedBox(height: 20),
+              Text(isBest ? 'NEW BEST' : 'ROUND OVER',
+                  style: _fgStyle(18, spacing: 6)),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RankBadge(rank: rank, size: 64),
+                  const SizedBox(width: 20),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('${stats.score}',
+                          style: _fgStyle(54, weight: FontWeight.w800)),
+                      Text(
+                        rank?.name ?? 'UNRANKED',
+                        style: TextStyle(
+                          color: rank?.color ?? kFg.withValues(alpha: .5),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              const SizedBox(width: 20),
-              OutlinedButton(
-                style: _buttonStyle(),
-                onPressed: onMenu,
-                child: const Text('MENU'),
+              if (next != null) ...[
+                const SizedBox(height: 8),
+                Text('NEXT: ${next.name} AT ${next.threshold}',
+                    style: _fgStyle(12, weight: FontWeight.w400, spacing: 3)),
+              ],
+              const SizedBox(height: 20),
+              _statRow('HITS', '${stats.hits}'),
+              _statRow('MISSES', '${stats.misses}'),
+              _statRow(
+                  'ACCURACY', '${(stats.accuracy * 100).toStringAsFixed(0)}%'),
+              _statRow('AVG KILL', '${stats.avgKillMs.toStringAsFixed(0)} MS'),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  OutlinedButton(
+                    style: _buttonStyle(),
+                    onPressed: onReplay,
+                    child: const Text('AGAIN'),
+                  ),
+                  const SizedBox(width: 20),
+                  OutlinedButton(
+                    style: _buttonStyle(),
+                    onPressed: onMenu,
+                    child: const Text('MENU'),
+                  ),
+                ],
               ),
+              const SizedBox(height: 20),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1794,6 +2031,88 @@ class _ResultsScreen extends StatelessWidget {
             Text(value, style: _fgStyle(14)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Profile — rank and best score for every scenario.
+// ---------------------------------------------------------------------------
+class _ProfileScreen extends StatelessWidget {
+  const _ProfileScreen({required this.bests, required this.onBack});
+
+  final Map<int, int> bests;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        children: [
+          _settingsHeader('PROFILE', onBack),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 460),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 12),
+                      for (int i = 0; i < kScenarios.length; i++)
+                        _scenarioCard(i),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _scenarioCard(int i) {
+    final int best = bests[i] ?? 0;
+    final Rank? rank = rankFor(best);
+    final Rank? next = nextRankFor(best);
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        border: Border.all(color: kFg.withValues(alpha: .3)),
+      ),
+      child: Row(
+        children: [
+          RankBadge(rank: rank, size: 64),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(kScenarios[i], style: _fgStyle(18, spacing: 5)),
+                const SizedBox(height: 4),
+                Text(
+                  rank?.name ?? 'UNRANKED',
+                  style: TextStyle(
+                    color: rank?.color ?? kFg.withValues(alpha: .5),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 4,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  next == null
+                      ? 'BEST $best — TOP RANK'
+                      : 'BEST $best — NEXT ${next.name} AT ${next.threshold}',
+                  style: _fgStyle(11, weight: FontWeight.w400, spacing: 2),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
