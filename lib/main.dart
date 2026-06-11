@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -25,7 +26,7 @@ const List<Color> kTargetColors = [
 // Gameplay tuning.
 const double kRoundSeconds = 30;
 const int kMaxTargets = 3;
-const double kGrowTime = 0.25;
+const double kGrowTime = 0.1;
 const int kHitScore = 100;
 const int kMissPenalty = 25;
 
@@ -80,8 +81,21 @@ const List<String> kScenarios = ['CUBES'];
 
 const List<Color> kBorderColors = [Color(0xFF000000), ...kTargetColors];
 
+// Arena (trainer) background choices — menu UI keeps its own fixed theme.
+const List<Color> kBgColors = [
+  kBg, // charcoal
+  Color(0xFF0A0E1A), // midnight navy
+  Color(0xFF000000), // black
+  Color(0xFF14091F), // deep purple
+  Color(0xFF14100B), // dark umber
+  Color(0xFF0C1208), // olive black
+  Color(0xFFF3EFE6), // paper (light)
+];
+
 class AppSettings {
   Color targetColor = kFg;
+  Color arenaBg = kBg; // trainer background
+  Color arenaAccent = kFg; // trainer grid/HUD accent
   Color crosshairColor = kFg;
   double crosshairDot = 2.2; // center dot radius (px); 0 removes it
   double crosshairLength = 10; // length of the 4 lines (px); 0 removes them
@@ -96,9 +110,13 @@ class AppSettings {
   double fireScale = 1.0;
   double fireOpacity = 1.0;
 
+  bool showFps = false;
+
   Future<void> load() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     targetColor = Color(prefs.getInt('target_color') ?? kFg.toARGB32());
+    arenaBg = Color(prefs.getInt('arena_bg') ?? kBg.toARGB32());
+    arenaAccent = Color(prefs.getInt('arena_accent') ?? kFg.toARGB32());
     crosshairColor = Color(prefs.getInt('crosshair_color') ?? kFg.toARGB32());
     crosshairDot = prefs.getDouble('crosshair_dot') ?? 2.2;
     crosshairLength = prefs.getDouble('crosshair_length') ?? 10;
@@ -111,11 +129,14 @@ class AppSettings {
     fireY = prefs.getDouble('fire_y') ?? -1;
     fireScale = prefs.getDouble('fire_scale') ?? 1.0;
     fireOpacity = prefs.getDouble('fire_opacity') ?? 1.0;
+    showFps = prefs.getBool('show_fps') ?? false;
   }
 
   Future<void> save() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setInt('target_color', targetColor.toARGB32());
+    await prefs.setInt('arena_bg', arenaBg.toARGB32());
+    await prefs.setInt('arena_accent', arenaAccent.toARGB32());
     await prefs.setInt('crosshair_color', crosshairColor.toARGB32());
     await prefs.setDouble('crosshair_dot', crosshairDot);
     await prefs.setDouble('crosshair_length', crosshairLength);
@@ -128,6 +149,7 @@ class AppSettings {
     await prefs.setDouble('fire_y', fireY);
     await prefs.setDouble('fire_scale', fireScale);
     await prefs.setDouble('fire_opacity', fireOpacity);
+    await prefs.setBool('show_fps', showFps);
   }
 }
 
@@ -303,10 +325,11 @@ class GameEngine extends ChangeNotifier {
   double pitch = 0;
   double sensitivity = 1.0;
 
-  // Transient feedback timers (seconds remaining).
-  double flashT = 0; // muzzle ring after any shot
+  // Transient feedback timer (seconds remaining).
   double hitT = 0; // hit marker after a kill
   bool firePressed = false;
+
+  double fps = 0; // smoothed, fed by the ticker from raw frame deltas
 
   double get timeLeft =>
       (kRoundSeconds - clock).clamp(0, kRoundSeconds).toDouble();
@@ -353,7 +376,6 @@ class GameEngine extends ChangeNotifier {
 
   void update(double dt) {
     if (!running || paused) return;
-    if (flashT > 0) flashT -= dt;
     if (hitT > 0) hitT -= dt;
     if (countdown > 0) {
       countdown -= dt;
@@ -400,7 +422,6 @@ class GameEngine extends ChangeNotifier {
   /// Ray-AABB slab test from the crosshair; nearest hit wins.
   void shoot() {
     if (!running || paused || countdown > 0) return;
-    flashT = 0.12;
     HapticFeedback.selectionClick();
     final double cp = math.cos(pitch);
     final double fx = cp * math.sin(yaw);
@@ -493,6 +514,9 @@ class _GameScreenState extends State<GameScreen>
     final double dt =
         (elapsed - _prev).inMicroseconds / Duration.microsecondsPerSecond;
     _prev = elapsed;
+    if (dt > 0 && dt < 0.5) {
+      _game.fps += (1 / dt - _game.fps) * 0.1;
+    }
     // Clamp dt so a dropped frame or app pause can't teleport the clock.
     _game.update(dt.clamp(0.0, 1 / 15));
   }
@@ -594,10 +618,11 @@ class _GameScreenState extends State<GameScreen>
 
 /// TextPainter that only re-lays-out when its string changes.
 class _CachedText {
-  _CachedText(this.fontSize, {this.weight = FontWeight.w600});
+  _CachedText(this.fontSize, {this.weight = FontWeight.w600, this.color = kFg});
 
   final double fontSize;
   final FontWeight weight;
+  final Color color;
   String? _last;
   TextPainter? _tp;
 
@@ -607,7 +632,7 @@ class _CachedText {
         text: TextSpan(
           text: s,
           style: TextStyle(
-            color: kFg,
+            color: color,
             fontSize: fontSize,
             fontWeight: weight,
             fontFeatures: const [FontFeature.tabularFigures()],
@@ -628,71 +653,137 @@ class _GamePainter extends CustomPainter {
     _fxStroke
       ..color = settings.crosshairColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5;
+      ..strokeWidth = settings.crosshairWidth;
+    _bgPaint.color = settings.arenaBg;
+    _accentFill.color = settings.arenaAccent;
+    _edgePaint
+      ..color = settings.arenaAccent.withValues(alpha: 0.35)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    _cubeEdge.color = settings.arenaBg;
+    // Distance-fog endpoints and per-face cube shades, derived from the
+    // player's arena/target colors.
+    _fogNear = Color.lerp(settings.arenaBg, settings.arenaAccent, 0.22)!;
+    _fogFar = Color.lerp(settings.arenaBg, const Color(0xFF000000), 0.65)!;
+    _shadeTop =
+        Color.lerp(const Color(0xFF000000), settings.targetColor, 0.85)!;
+    _shadeBottom =
+        Color.lerp(const Color(0xFF000000), settings.targetColor, 0.55)!;
+    _shadeSide =
+        Color.lerp(const Color(0xFF000000), settings.targetColor, 0.68)!;
   }
+
+  late final Color _fogNear;
+  late final Color _fogFar;
+  late final Color _shadeTop;
+  late final Color _shadeBottom;
+  late final Color _shadeSide;
 
   final GameEngine game;
   final AppSettings settings;
   final Paint _fxStroke = Paint();
-
-  static final Paint _bgPaint = Paint()..color = kBg;
-  static final Paint _fgFill = Paint()..color = kFg;
-  static final Paint _gridPaint = Paint()
-    ..color = kFg.withValues(alpha: 0.13)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1;
-  static final Paint _edgePaint = Paint()
-    ..color = kFg.withValues(alpha: 0.35)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1.5;
+  final Paint _bgPaint = Paint();
+  final Paint _accentFill = Paint();
+  final Paint _edgePaint = Paint();
   final Paint _cubeFill = Paint();
-  static final Paint _cubeEdge = Paint()
-    ..color = kBg
+  final Paint _cubeEdge = Paint()
     ..style = PaintingStyle.stroke
     ..strokeWidth = 2
     ..strokeJoin = StrokeJoin.round;
 
-  final _CachedText _scoreText = _CachedText(20);
-  final _CachedText _timeText = _CachedText(20);
-  final _CachedText _countText = _CachedText(96, weight: FontWeight.w800);
+  late final _CachedText _scoreText =
+      _CachedText(20, color: settings.arenaAccent);
+  late final _CachedText _timeText =
+      _CachedText(20, color: settings.arenaAccent);
+  late final _CachedText _countText =
+      _CachedText(96, weight: FontWeight.w800, color: settings.arenaAccent);
+  late final _CachedText _fpsText =
+      _CachedText(13, weight: FontWeight.w400, color: settings.arenaAccent);
 
-  // The room as world-space line segments: 12 cube edges plus grids on the
-  // floor and the target wall. Built once.
-  static final List<(double, double, double, double, double, double, bool)>
-      _room = _buildRoom();
+  // The room's six surfaces as world-space quads. Built once.
+  static final List<List<(double, double, double)>> _walls = _buildWalls();
 
-  static List<(double, double, double, double, double, double, bool)>
-      _buildRoom() {
+  static List<List<(double, double, double)>> _buildWalls() {
     const double w = kRoomHalfW,
         f = kRoomFloor,
         c = kRoomCeil,
         zf = kRoomFront,
         zb = kRoomBack;
-    final lines = <(double, double, double, double, double, double, bool)>[];
-    // 12 edges of the room cube (drawn brighter).
+    return [
+      [(-w, f, zf), (w, f, zf), (w, f, zb), (-w, f, zb)], // floor
+      [(-w, c, zf), (w, c, zf), (w, c, zb), (-w, c, zb)], // ceiling
+      [(-w, f, zf), (-w, f, zb), (-w, c, zb), (-w, c, zf)], // left wall
+      [(w, f, zf), (w, f, zb), (w, c, zb), (w, c, zf)], // right wall
+      [(-w, f, zb), (w, f, zb), (w, c, zb), (-w, c, zb)], // target wall
+      [(-w, f, zf), (w, f, zf), (w, c, zf), (-w, c, zf)], // behind player
+    ];
+  }
+
+  /// Fog-shaded room surfaces: clip each quad against the near plane, then
+  /// fill with per-vertex colors (GPU-interpolated; no shader allocation).
+  void _paintWalls(Canvas canvas, Size size) {
+    final double cx = size.width / 2, cy = size.height / 2, fo = game.focal;
+    for (final List<(double, double, double)> wall in _walls) {
+      final List<(double, double, double)> cam = [
+        for (final (double x, double y, double z) in wall)
+          game.toCamera(x, y, z)
+      ];
+      // Sutherland-Hodgman clip against z = kNearPlane.
+      final List<(double, double, double)> poly = [];
+      for (int i = 0; i < cam.length; i++) {
+        final (double, double, double) a = cam[i];
+        final (double, double, double) b = cam[(i + 1) % cam.length];
+        final bool aIn = a.$3 > kNearPlane, bIn = b.$3 > kNearPlane;
+        if (aIn) poly.add(a);
+        if (aIn != bIn) {
+          final double t = (kNearPlane - a.$3) / (b.$3 - a.$3);
+          poly.add((
+            a.$1 + (b.$1 - a.$1) * t,
+            a.$2 + (b.$2 - a.$2) * t,
+            kNearPlane,
+          ));
+        }
+      }
+      if (poly.length < 3) continue;
+      final List<Offset> pts = [];
+      final List<Color> cols = [];
+      for (final (double x, double y, double z) in poly) {
+        pts.add(Offset(cx + fo * x / z, cy - fo * y / z));
+        // Rotation preserves distance, so camera-space length is world
+        // distance from the eye — rotation-stable fog.
+        final double d = math.sqrt(x * x + y * y + z * z);
+        cols.add(Color.lerp(_fogNear, _fogFar, ((d - 2) / 14).clamp(0, 1))!);
+      }
+      canvas.drawVertices(
+        ui.Vertices(ui.VertexMode.triangleFan, pts, colors: cols),
+        BlendMode.dst,
+        _wallPaint,
+      );
+    }
+  }
+
+  static final Paint _wallPaint = Paint();
+
+  // The room: just its 12 edges as world-space segments. Built once.
+  static final List<(double, double, double, double, double, double)> _room =
+      _buildRoom();
+
+  static List<(double, double, double, double, double, double)> _buildRoom() {
+    const double w = kRoomHalfW,
+        f = kRoomFloor,
+        c = kRoomCeil,
+        zf = kRoomFront,
+        zb = kRoomBack;
+    final lines = <(double, double, double, double, double, double)>[];
     for (final (double y1, double y2) in [(f, f), (c, c)]) {
-      lines.add((-w, y1, zf, w, y2, zf, true));
-      lines.add((-w, y1, zb, w, y2, zb, true));
-      lines.add((-w, y1, zf, -w, y2, zb, true));
-      lines.add((w, y1, zf, w, y2, zb, true));
+      lines.add((-w, y1, zf, w, y2, zf));
+      lines.add((-w, y1, zb, w, y2, zb));
+      lines.add((-w, y1, zf, -w, y2, zb));
+      lines.add((w, y1, zf, w, y2, zb));
     }
     for (final double x in [-w, w]) {
-      lines.add((x, f, zf, x, c, zf, true));
-      lines.add((x, f, zb, x, c, zb, true));
-    }
-    // Floor grid.
-    for (double x = -w + 2; x <= w - 2 + 1e-9; x += 2) {
-      lines.add((x, f, zf, x, f, zb, false));
-    }
-    for (double z = zf + 3; z < zb; z += 3) {
-      lines.add((-w, f, z, w, f, z, false));
-    }
-    // Target-wall grid.
-    for (double x = -w + 2; x <= w - 2 + 1e-9; x += 2) {
-      lines.add((x, f, zb, x, c, zb, false));
-    }
-    for (double y = f + 2; y < c; y += 2) {
-      lines.add((-w, y, zb, w, y, zb, false));
+      lines.add((x, f, zf, x, c, zf));
+      lines.add((x, f, zb, x, c, zb));
     }
     return lines;
   }
@@ -754,6 +845,13 @@ class _GamePainter extends CustomPainter {
         _ => t.z,
       };
       if (sign * centerOnAxis + h >= 0) continue;
+      // Fake lighting: face brightness by orientation.
+      _cubeFill.color = switch ((axis, sign > 0)) {
+        (2, false) => settings.targetColor, // facing the player
+        (1, true) => _shadeTop,
+        (1, false) => _shadeBottom,
+        _ => _shadeSide,
+      };
       final Path face = Path()
         ..moveTo(pts[a].dx, pts[a].dy)
         ..lineTo(pts[b].dx, pts[b].dy)
@@ -769,15 +867,20 @@ class _GamePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     game.arena = size;
     canvas.drawRect(Offset.zero & size, _bgPaint);
+    _paintWalls(canvas, size);
 
-    // The room: grids dim, cube-room edges brighter.
+    // The room: just its edge lines, no surface tiling.
     for (final (double ax, double ay, double az, double bx, double by,
-        double bz, bool edge) in _room) {
-      _worldLine(canvas, size, ax, ay, az, bx, by, bz,
-          edge ? _edgePaint : _gridPaint);
+        double bz) in _room) {
+      _worldLine(canvas, size, ax, ay, az, bx, by, bz, _edgePaint);
     }
 
     final double cx = size.width / 2, cy = size.height / 2;
+
+    if (settings.showFps && game.fps > 0) {
+      final TextPainter fps = _fpsText.of('${game.fps.round()} FPS');
+      fps.paint(canvas, Offset(20, size.height - fps.height - 16));
+    }
 
     if (game.countdown > 0) {
       final TextPainter tp = _countText.of('${game.countdown.ceil()}');
@@ -803,12 +906,10 @@ class _GamePainter extends CustomPainter {
     final Offset center = Offset(cx, cy);
     drawCrosshair(canvas, center, settings);
 
-    // Muzzle ring after a shot; X-shaped hit marker after a kill.
-    if (game.flashT > 0) {
-      final double k = 1 - game.flashT / 0.12;
-      canvas.drawCircle(center, 14 + k * 12, _fxStroke);
-    }
+    // X-shaped hit marker after a kill: crosshair color, half its size.
     if (game.hitT > 0) {
+      final double r1 = (6 + settings.crosshairLength) * 0.5;
+      final double r0 = r1 * 0.35;
       for (final (double dx, double dy) in [
         (1.0, 1.0),
         (-1.0, 1.0),
@@ -816,13 +917,13 @@ class _GamePainter extends CustomPainter {
         (-1.0, -1.0)
       ]) {
         final Offset dir = Offset(dx, dy) / math.sqrt2;
-        canvas.drawLine(center + dir * 9, center + dir * 19, _fxStroke);
+        canvas.drawLine(center + dir * r0, center + dir * r1, _fxStroke);
       }
     }
 
     // HUD: time bar, score top-left, clock top-center, pause top-right.
     final double frac = game.timeLeft / kRoundSeconds;
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width * frac, 4), _fgFill);
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width * frac, 4), _accentFill);
     final TextPainter score = _scoreText.of('${game.stats.score}');
     score.paint(canvas, const Offset(20, 18));
     final TextPainter time = _timeText.of(game.timeLeft.ceil().toString());
@@ -834,7 +935,7 @@ class _GamePainter extends CustomPainter {
 
   void _paintPauseButton(Canvas canvas) {
     final Rect r = game.pauseRect;
-    final Paint bar = Paint()..color = kFg;
+    final Paint bar = Paint()..color = settings.arenaAccent;
     const double barW = 6, barH = 22;
     final Offset c = r.center;
     canvas.drawRect(
@@ -852,10 +953,11 @@ class _GamePainter extends CustomPainter {
     final double r = game.fireR;
     final double op = game.fireOpacity.clamp(0.15, 1.0);
     final Paint ring = Paint()
-      ..color = kFg.withValues(alpha: op)
+      ..color = settings.arenaAccent.withValues(alpha: op)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5;
-    final Paint fill = Paint()..color = kFg.withValues(alpha: op);
+    final Paint fill =
+        Paint()..color = settings.arenaAccent.withValues(alpha: op);
     canvas.drawCircle(c, r, ring);
     canvas.drawCircle(c, r * (game.firePressed ? 0.82 : 0.30), fill);
   }
@@ -1070,6 +1172,20 @@ class _SettingsScreen extends StatelessWidget {
                   onChanged();
                 }),
                 const SizedBox(height: 24),
+                _label('ARENA BACKGROUND'),
+                const SizedBox(height: 10),
+                _swatches(settings.arenaBg, (c) {
+                  settings.arenaBg = c;
+                  onChanged();
+                }, palette: kBgColors),
+                const SizedBox(height: 24),
+                _label('ARENA ACCENT'),
+                const SizedBox(height: 10),
+                _swatches(settings.arenaAccent, (c) {
+                  settings.arenaAccent = c;
+                  onChanged();
+                }),
+                const SizedBox(height: 24),
                 _label('CROSSHAIR COLOR'),
                 const SizedBox(height: 10),
                 _swatches(settings.crosshairColor, (c) {
@@ -1118,6 +1234,36 @@ class _SettingsScreen extends StatelessWidget {
                   settings.sensitivity = v;
                   onChanged();
                 }),
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _label('FPS COUNTER'),
+                      GestureDetector(
+                        onTap: () {
+                          settings.showFps = !settings.showFps;
+                          onChanged();
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 18, vertical: 8),
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: settings.showFps
+                                  ? kFg
+                                  : kFg.withValues(alpha: .35),
+                              width: settings.showFps ? 2 : 1,
+                            ),
+                          ),
+                          child: Text(settings.showFps ? 'ON' : 'OFF',
+                              style: _fgStyle(13)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 28),
                 OutlinedButton(
                   style: _buttonStyle(),
