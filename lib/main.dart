@@ -24,7 +24,7 @@ const List<Color> kTargetColors = [
 ];
 
 // Gameplay tuning.
-const double kRoundSeconds = 30;
+const double kRoundSeconds = 60;
 const int kMaxTargets = 3;
 const double kGrowTime = 0.1;
 const int kHitScore = 100;
@@ -44,9 +44,13 @@ const double kRoomCeil = 6.3;
 const double kRoomFront = -1; // wall right behind the player
 const double kRoomBack = 14; // target wall
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   runApp(const AimTrainerApp());
 }
 
@@ -75,7 +79,16 @@ class AimTrainerApp extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Screen flow: menu <-> settings, menu -> playing -> results
 // ---------------------------------------------------------------------------
-enum _Screen { menu, settings, hudEdit, playing, results }
+enum _Screen {
+  menu,
+  settings,
+  settingsCrosshair,
+  settingsColors,
+  settingsGeneral,
+  hudEdit,
+  playing,
+  results,
+}
 
 const List<String> kScenarios = ['CUBES'];
 
@@ -97,6 +110,7 @@ class AppSettings {
   Color arenaBg = kBg; // trainer background
   Color arenaAccent = kFg; // trainer grid/HUD accent
   Color crosshairColor = kFg;
+  double crosshairScale = 1.0; // overall multiplier on the whole crosshair
   double crosshairDot = 2.2; // center dot radius (px); 0 removes it
   double crosshairLength = 10; // length of the 4 lines (px); 0 removes them
   double crosshairWidth = 2.5; // stroke width of the 4 lines (px)
@@ -118,6 +132,7 @@ class AppSettings {
     arenaBg = Color(prefs.getInt('arena_bg') ?? kBg.toARGB32());
     arenaAccent = Color(prefs.getInt('arena_accent') ?? kFg.toARGB32());
     crosshairColor = Color(prefs.getInt('crosshair_color') ?? kFg.toARGB32());
+    crosshairScale = prefs.getDouble('crosshair_scale') ?? 1.0;
     crosshairDot = prefs.getDouble('crosshair_dot') ?? 2.2;
     crosshairLength = prefs.getDouble('crosshair_length') ?? 10;
     crosshairWidth = prefs.getDouble('crosshair_width') ?? 2.5;
@@ -138,6 +153,7 @@ class AppSettings {
     await prefs.setInt('arena_bg', arenaBg.toARGB32());
     await prefs.setInt('arena_accent', arenaAccent.toARGB32());
     await prefs.setInt('crosshair_color', crosshairColor.toARGB32());
+    await prefs.setDouble('crosshair_scale', crosshairScale);
     await prefs.setDouble('crosshair_dot', crosshairDot);
     await prefs.setDouble('crosshair_length', crosshairLength);
     await prefs.setDouble('crosshair_width', crosshairWidth);
@@ -156,11 +172,12 @@ class AppSettings {
 /// Shared crosshair renderer used by the game HUD and the settings preview.
 /// Border is drawn first as a fatter pass underneath the main color.
 void drawCrosshair(Canvas canvas, Offset center, AppSettings s) {
-  const double gap = 6;
-  final double thick = s.crosshairWidth;
-  final double len = s.crosshairLength;
-  final double dotR = s.crosshairDot;
-  final double bw = s.crosshairBorder;
+  final double sc = s.crosshairScale;
+  final double gap = 6 * sc;
+  final double thick = s.crosshairWidth * sc;
+  final double len = s.crosshairLength * sc;
+  final double dotR = s.crosshairDot * sc;
+  final double bw = s.crosshairBorder * sc;
 
   if (len > 0.1) {
     final Paint stroke = Paint()
@@ -218,6 +235,7 @@ class _HomeFlowState extends State<HomeFlow> {
   RoundStats? _last;
   int _best = 0;
   int _scenario = 0;
+  int _round = 0; // bumped to force a fresh GameScreen on restart
 
   @override
   void initState() {
@@ -229,6 +247,11 @@ class _HomeFlowState extends State<HomeFlow> {
     _settings.load().then((_) {
       if (mounted) setState(() {});
     });
+  }
+
+  void _saveSettings() {
+    setState(() {});
+    _settings.save();
   }
 
   void _onRoundFinished(RoundStats stats) {
@@ -255,26 +278,39 @@ class _HomeFlowState extends State<HomeFlow> {
             onSettings: () => setState(() => _screen = _Screen.settings),
           ),
         _Screen.settings => _SettingsScreen(
-            settings: _settings,
-            onChanged: () {
-              setState(() {});
-              _settings.save();
-            },
+            onCrosshair: () =>
+                setState(() => _screen = _Screen.settingsCrosshair),
+            onColors: () => setState(() => _screen = _Screen.settingsColors),
+            onGeneral: () => setState(() => _screen = _Screen.settingsGeneral),
             onHud: () => setState(() => _screen = _Screen.hudEdit),
             onBack: () => setState(() => _screen = _Screen.menu),
           ),
+        _Screen.settingsCrosshair => _CrosshairSettingsScreen(
+            settings: _settings,
+            onChanged: _saveSettings,
+            onBack: () => setState(() => _screen = _Screen.settings),
+          ),
+        _Screen.settingsColors => _ColorsSettingsScreen(
+            settings: _settings,
+            onChanged: _saveSettings,
+            onBack: () => setState(() => _screen = _Screen.settings),
+          ),
+        _Screen.settingsGeneral => _GeneralSettingsScreen(
+            settings: _settings,
+            onChanged: _saveSettings,
+            onBack: () => setState(() => _screen = _Screen.settings),
+          ),
         _Screen.hudEdit => _HudEditScreen(
             settings: _settings,
-            onChanged: () {
-              setState(() {});
-              _settings.save();
-            },
+            onChanged: _saveSettings,
             onBack: () => setState(() => _screen = _Screen.settings),
           ),
         _Screen.playing => GameScreen(
+            key: ValueKey<int>(_round),
             settings: _settings,
             onFinished: _onRoundFinished,
             onQuit: () => setState(() => _screen = _Screen.menu),
+            onRestart: () => setState(() => _round++),
           ),
         _Screen.results => _ResultsScreen(
             stats: _last!,
@@ -478,11 +514,13 @@ class GameScreen extends StatefulWidget {
     required this.settings,
     required this.onFinished,
     required this.onQuit,
+    required this.onRestart,
   });
 
   final AppSettings settings;
   final void Function(RoundStats) onFinished;
   final VoidCallback onQuit;
+  final VoidCallback onRestart;
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -600,6 +638,12 @@ class _GameScreenState extends State<GameScreen>
                     style: _buttonStyle(),
                     onPressed: () => _setPaused(false),
                     child: const Text('RESUME'),
+                  ),
+                  const SizedBox(height: 20),
+                  OutlinedButton(
+                    style: _buttonStyle(),
+                    onPressed: widget.onRestart,
+                    child: const Text('RESTART'),
                   ),
                   const SizedBox(height: 20),
                   OutlinedButton(
@@ -824,6 +868,36 @@ class _GamePainter extends CustomPainter {
     );
   }
 
+  /// Convex quad with rounded corners (radius relative to its shortest edge).
+  static Path _roundedQuad(List<Offset> p) {
+    double minLen = double.infinity;
+    for (int i = 0; i < 4; i++) {
+      final double len = (p[(i + 1) % 4] - p[i]).distance;
+      if (len < minLen) minLen = len;
+    }
+    final double r = minLen * 0.25;
+    final Path path = Path();
+    for (int i = 0; i < 4; i++) {
+      final Offset prev = p[(i + 3) % 4];
+      final Offset cur = p[i];
+      final Offset next = p[(i + 1) % 4];
+      final Offset inV = cur - prev;
+      final Offset outV = next - cur;
+      final double inLen = inV.distance, outLen = outV.distance;
+      if (inLen < 1e-3 || outLen < 1e-3) continue;
+      final Offset a = cur - inV / inLen * math.min(r, inLen / 2);
+      final Offset b = cur + outV / outLen * math.min(r, outLen / 2);
+      if (i == 0) {
+        path.moveTo(a.dx, a.dy);
+      } else {
+        path.lineTo(a.dx, a.dy);
+      }
+      path.quadraticBezierTo(cur.dx, cur.dy, b.dx, b.dy);
+    }
+    path.close();
+    return path;
+  }
+
   void _paintCube(Canvas canvas, Size size, TargetCube t) {
     final double h = game.halfOf(t);
     if (h <= 0.01) return;
@@ -852,12 +926,8 @@ class _GamePainter extends CustomPainter {
         (1, false) => _shadeBottom,
         _ => _shadeSide,
       };
-      final Path face = Path()
-        ..moveTo(pts[a].dx, pts[a].dy)
-        ..lineTo(pts[b].dx, pts[b].dy)
-        ..lineTo(pts[c].dx, pts[c].dy)
-        ..lineTo(pts[d].dx, pts[d].dy)
-        ..close();
+      final Path face =
+          _roundedQuad([pts[a], pts[b], pts[c], pts[d]]);
       canvas.drawPath(face, _cubeFill);
       canvas.drawPath(face, _cubeEdge);
     }
@@ -908,7 +978,8 @@ class _GamePainter extends CustomPainter {
 
     // X-shaped hit marker after a kill: crosshair color, half its size.
     if (game.hitT > 0) {
-      final double r1 = (6 + settings.crosshairLength) * 0.5;
+      final double r1 =
+          (6 + settings.crosshairLength) * 0.5 * settings.crosshairScale;
       final double r0 = r1 * 0.35;
       for (final (double dx, double dy) in [
         (1.0, 1.0),
@@ -949,9 +1020,10 @@ class _GamePainter extends CustomPainter {
   }
 
   void _paintFireButton(Canvas canvas) {
+    final double op = game.fireOpacity.clamp(0.0, 1.0);
+    if (op <= 0.01) return; // fully transparent: invisible but still tappable
     final Offset c = game.fireCenter;
     final double r = game.fireR;
-    final double op = game.fireOpacity.clamp(0.15, 1.0);
     final Paint ring = Paint()
       ..color = settings.arenaAccent.withValues(alpha: op)
       ..style = PaintingStyle.stroke
@@ -1069,218 +1141,414 @@ class _MenuScreen extends StatelessWidget {
 
 class _SettingsScreen extends StatelessWidget {
   const _SettingsScreen({
+    required this.onCrosshair,
+    required this.onColors,
+    required this.onGeneral,
+    required this.onHud,
+    required this.onBack,
+  });
+
+  final VoidCallback onCrosshair;
+  final VoidCallback onColors;
+  final VoidCallback onGeneral;
+  final VoidCallback onHud;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget section(String label, VoidCallback onTap) => Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: SizedBox(
+            width: 280,
+            child: OutlinedButton(
+              style: _buttonStyle(),
+              onPressed: onTap,
+              child: Text(label),
+            ),
+          ),
+        );
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Center(
+          child: Column(
+            children: [
+              const SizedBox(height: 24),
+              Text('SETTINGS', style: _fgStyle(24, spacing: 8)),
+              const SizedBox(height: 28),
+              section('CROSSHAIR', onCrosshair),
+              section('COLORS', onColors),
+              section('HUD', onHud),
+              section('GENERAL', onGeneral),
+              const SizedBox(height: 10),
+              TextButton(
+                onPressed: onBack,
+                child: Text('BACK',
+                    style: _fgStyle(14, weight: FontWeight.w500, spacing: 4)),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Shared widgets for the settings sub-screens. ------------------------------
+
+Widget _settingsLabel(String s) =>
+    Text(s, style: _fgStyle(13, weight: FontWeight.w400, spacing: 4));
+
+Widget _settingsSlider(
+    double value, double min, double max, ValueChanged<double> set) {
+  return SliderTheme(
+    data: SliderThemeData(
+      activeTrackColor: kFg,
+      inactiveTrackColor: kFg.withValues(alpha: .2),
+      thumbColor: kFg,
+      overlayColor: kFg.withValues(alpha: .12),
+      trackHeight: 2,
+    ),
+    child: Slider(value: value.clamp(min, max), min: min, max: max, onChanged: set),
+  );
+}
+
+Widget _settingsSliderRow(String label, String value) {
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 24),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [_settingsLabel(label), Text(value, style: _fgStyle(13))],
+    ),
+  );
+}
+
+/// A back bar used by every sub-screen.
+Widget _settingsHeader(String title, VoidCallback onBack) {
+  return Row(
+    children: [
+      IconButton(
+        onPressed: onBack,
+        icon: const Icon(Icons.chevron_left, color: kFg, size: 30),
+      ),
+      Expanded(
+        child: Center(child: Text(title, style: _fgStyle(18, spacing: 6))),
+      ),
+      const SizedBox(width: 46), // balance the back button
+    ],
+  );
+}
+
+/// Full RGB color editor: preview swatch plus three channel sliders.
+class _RgbPicker extends StatelessWidget {
+  const _RgbPicker({
+    required this.label,
+    required this.color,
+    required this.onPick,
+  });
+
+  final String label;
+  final Color color;
+  final ValueChanged<Color> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final int r = (color.r * 255).round();
+    final int g = (color.g * 255).round();
+    final int b = (color.b * 255).round();
+
+    Widget channel(String name, int v, Color Function(int) compose) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Row(
+          children: [
+            SizedBox(width: 16, child: Text(name, style: _fgStyle(12))),
+            Expanded(
+              child: _settingsSlider(
+                  v.toDouble(), 0, 255, (nv) => onPick(compose(nv.round()))),
+            ),
+            SizedBox(
+                width: 34,
+                child: Text('$v',
+                    textAlign: TextAlign.right, style: _fgStyle(12))),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _settingsLabel(label),
+            const SizedBox(width: 12),
+            Container(
+              width: 26,
+              height: 26,
+              decoration: BoxDecoration(
+                color: color,
+                border: Border.all(color: kFg.withValues(alpha: .35)),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        channel('R', r, (v) => Color.fromARGB(255, v, g, b)),
+        channel('G', g, (v) => Color.fromARGB(255, r, v, b)),
+        channel('B', b, (v) => Color.fromARGB(255, r, g, v)),
+      ],
+    );
+  }
+}
+
+// Crosshair section: pinned live preview, everything crosshair in one place.
+class _CrosshairSettingsScreen extends StatelessWidget {
+  const _CrosshairSettingsScreen({
     required this.settings,
     required this.onChanged,
-    required this.onHud,
     required this.onBack,
   });
 
   final AppSettings settings;
   final VoidCallback onChanged;
-  final VoidCallback onHud;
   final VoidCallback onBack;
 
-  Widget _label(String s) =>
-      Text(s, style: _fgStyle(13, weight: FontWeight.w400, spacing: 4));
-
-  Widget _swatches(Color selected, ValueChanged<Color> pick,
-      {List<Color> palette = kTargetColors}) {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      alignment: WrapAlignment.center,
-      children: [
-        for (final Color c in palette)
-          GestureDetector(
-            onTap: () => pick(c),
-            child: Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: c,
-                border: Border.all(
-                  color: c == selected ? kFg : kFg.withValues(alpha: .25),
-                  width: c == selected ? 3 : 1,
+  @override
+  Widget build(BuildContext context) {
+    final AppSettings s = settings;
+    return SafeArea(
+      child: Column(
+        children: [
+          _settingsHeader('CROSSHAIR', onBack),
+          // Preview stays pinned while the controls scroll beneath it.
+          Container(
+            width: 220,
+            height: 72,
+            decoration: BoxDecoration(
+              color: s.arenaBg,
+              border: Border.all(color: kFg.withValues(alpha: .25)),
+            ),
+            child: CustomPaint(
+              painter: _CrosshairPreviewPainter(
+                s.crosshairColor,
+                s.crosshairDot,
+                s.crosshairLength,
+                s.crosshairWidth,
+                s.crosshairBorder,
+                s.crosshairBorderColor,
+                s.crosshairScale,
+                s,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 460),
+                  child: Column(
+                    children: [
+                      _settingsSliderRow(
+                          'SCALE', '${(s.crosshairScale * 100).round()}%'),
+                      _settingsSlider(s.crosshairScale, 0.5, 2.5, (v) {
+                        s.crosshairScale = v;
+                        onChanged();
+                      }),
+                      _settingsSliderRow(
+                          'CENTER DOT SIZE', s.crosshairDot.toStringAsFixed(1)),
+                      _settingsSlider(s.crosshairDot, 0, 8, (v) {
+                        s.crosshairDot = v;
+                        onChanged();
+                      }),
+                      _settingsSliderRow(
+                          'LENGTH', s.crosshairLength.toStringAsFixed(0)),
+                      _settingsSlider(s.crosshairLength, 0, 30, (v) {
+                        s.crosshairLength = v;
+                        onChanged();
+                      }),
+                      _settingsSliderRow(
+                          'WIDTH', s.crosshairWidth.toStringAsFixed(1)),
+                      _settingsSlider(s.crosshairWidth, 1, 8, (v) {
+                        s.crosshairWidth = v;
+                        onChanged();
+                      }),
+                      _settingsSliderRow('BORDER THICKNESS',
+                          s.crosshairBorder.toStringAsFixed(1)),
+                      _settingsSlider(s.crosshairBorder, 0, 4, (v) {
+                        s.crosshairBorder = v;
+                        onChanged();
+                      }),
+                      const SizedBox(height: 12),
+                      _RgbPicker(
+                        label: 'CROSSHAIR COLOR',
+                        color: s.crosshairColor,
+                        onPick: (c) {
+                          s.crosshairColor = c;
+                          onChanged();
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      _RgbPicker(
+                        label: 'BORDER COLOR',
+                        color: s.crosshairBorderColor,
+                        onPick: (c) {
+                          s.crosshairBorderColor = c;
+                          onChanged();
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
-      ],
-    );
-  }
-
-  Widget _slider(
-      double value, double min, double max, ValueChanged<double> set) {
-    return SliderTheme(
-      data: SliderThemeData(
-        activeTrackColor: kFg,
-        inactiveTrackColor: kFg.withValues(alpha: .2),
-        thumbColor: kFg,
-        overlayColor: kFg.withValues(alpha: .12),
-        trackHeight: 2,
-      ),
-      child: Slider(value: value, min: min, max: max, onChanged: set),
-    );
-  }
-
-  Widget _sliderRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [_label(label), Text(value, style: _fgStyle(13))],
+        ],
       ),
     );
   }
+}
+
+// Colors section: target and arena colors, each fully RGB-adjustable.
+class _ColorsSettingsScreen extends StatelessWidget {
+  const _ColorsSettingsScreen({
+    required this.settings,
+    required this.onChanged,
+    required this.onBack,
+  });
+
+  final AppSettings settings;
+  final VoidCallback onChanged;
+  final VoidCallback onBack;
 
   @override
   Widget build(BuildContext context) {
+    final AppSettings s = settings;
     return SafeArea(
-      child: SingleChildScrollView(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 380),
-            child: Column(
-              children: [
-                const SizedBox(height: 28),
-                Text('SETTINGS', style: _fgStyle(24, spacing: 8)),
-                const SizedBox(height: 20),
-                // Live crosshair preview.
-                Container(
-                  width: 200,
-                  height: 76,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: kFg.withValues(alpha: .25)),
-                  ),
-                  child: CustomPaint(
-                    painter: _CrosshairPreviewPainter(
-                      settings.crosshairColor,
-                      settings.crosshairDot,
-                      settings.crosshairLength,
-                      settings.crosshairWidth,
-                      settings.crosshairBorder,
-                      settings.crosshairBorderColor,
-                      settings,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                _label('TARGET COLOR'),
-                const SizedBox(height: 10),
-                _swatches(settings.targetColor, (c) {
-                  settings.targetColor = c;
-                  onChanged();
-                }),
-                const SizedBox(height: 24),
-                _label('ARENA BACKGROUND'),
-                const SizedBox(height: 10),
-                _swatches(settings.arenaBg, (c) {
-                  settings.arenaBg = c;
-                  onChanged();
-                }, palette: kBgColors),
-                const SizedBox(height: 24),
-                _label('ARENA ACCENT'),
-                const SizedBox(height: 10),
-                _swatches(settings.arenaAccent, (c) {
-                  settings.arenaAccent = c;
-                  onChanged();
-                }),
-                const SizedBox(height: 24),
-                _label('CROSSHAIR COLOR'),
-                const SizedBox(height: 10),
-                _swatches(settings.crosshairColor, (c) {
-                  settings.crosshairColor = c;
-                  onChanged();
-                }),
-                const SizedBox(height: 24),
-                _label('CROSSHAIR BORDER COLOR'),
-                const SizedBox(height: 10),
-                _swatches(settings.crosshairBorderColor, (c) {
-                  settings.crosshairBorderColor = c;
-                  onChanged();
-                }, palette: kBorderColors),
-                const SizedBox(height: 24),
-                _sliderRow(
-                    'CENTER DOT SIZE', settings.crosshairDot.toStringAsFixed(1)),
-                _slider(settings.crosshairDot, 0, 8, (v) {
-                  settings.crosshairDot = v;
-                  onChanged();
-                }),
-                const SizedBox(height: 12),
-                _sliderRow('CROSSHAIR LENGTH',
-                    settings.crosshairLength.toStringAsFixed(0)),
-                _slider(settings.crosshairLength, 0, 30, (v) {
-                  settings.crosshairLength = v;
-                  onChanged();
-                }),
-                const SizedBox(height: 12),
-                _sliderRow('CROSSHAIR WIDTH',
-                    settings.crosshairWidth.toStringAsFixed(1)),
-                _slider(settings.crosshairWidth, 1, 8, (v) {
-                  settings.crosshairWidth = v;
-                  onChanged();
-                }),
-                const SizedBox(height: 12),
-                _sliderRow('BORDER THICKNESS',
-                    settings.crosshairBorder.toStringAsFixed(1)),
-                _slider(settings.crosshairBorder, 0, 4, (v) {
-                  settings.crosshairBorder = v;
-                  onChanged();
-                }),
-                const SizedBox(height: 12),
-                _sliderRow('SENSITIVITY',
-                    '${settings.sensitivity.toStringAsFixed(1)}X'),
-                _slider(settings.sensitivity, 0.4, 2.4, (v) {
-                  settings.sensitivity = v;
-                  onChanged();
-                }),
-                const SizedBox(height: 16),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        children: [
+          _settingsHeader('COLORS', onBack),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 460),
+                  child: Column(
                     children: [
-                      _label('FPS COUNTER'),
-                      GestureDetector(
-                        onTap: () {
-                          settings.showFps = !settings.showFps;
+                      const SizedBox(height: 8),
+                      _RgbPicker(
+                        label: 'TARGET COLOR',
+                        color: s.targetColor,
+                        onPick: (c) {
+                          s.targetColor = c;
                           onChanged();
                         },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 18, vertical: 8),
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: settings.showFps
-                                  ? kFg
-                                  : kFg.withValues(alpha: .35),
-                              width: settings.showFps ? 2 : 1,
-                            ),
-                          ),
-                          child: Text(settings.showFps ? 'ON' : 'OFF',
-                              style: _fgStyle(13)),
-                        ),
                       ),
+                      const SizedBox(height: 16),
+                      _RgbPicker(
+                        label: 'ARENA BACKGROUND',
+                        color: s.arenaBg,
+                        onPick: (c) {
+                          s.arenaBg = c;
+                          onChanged();
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      _RgbPicker(
+                        label: 'ARENA ACCENT',
+                        color: s.arenaAccent,
+                        onPick: (c) {
+                          s.arenaAccent = c;
+                          onChanged();
+                        },
+                      ),
+                      const SizedBox(height: 24),
                     ],
                   ),
                 ),
-                const SizedBox(height: 28),
-                OutlinedButton(
-                  style: _buttonStyle(),
-                  onPressed: onHud,
-                  child: const Text('CUSTOMISE HUD'),
-                ),
-                const SizedBox(height: 20),
-                OutlinedButton(
-                  style: _buttonStyle(),
-                  onPressed: onBack,
-                  child: const Text('BACK'),
-                ),
-                const SizedBox(height: 28),
-              ],
+              ),
             ),
           ),
-        ),
+        ],
+      ),
+    );
+  }
+}
+
+// General section: sensitivity and diagnostics.
+class _GeneralSettingsScreen extends StatelessWidget {
+  const _GeneralSettingsScreen({
+    required this.settings,
+    required this.onChanged,
+    required this.onBack,
+  });
+
+  final AppSettings settings;
+  final VoidCallback onChanged;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppSettings s = settings;
+    return SafeArea(
+      child: Column(
+        children: [
+          _settingsHeader('GENERAL', onBack),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 460),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 8),
+                      _settingsSliderRow(
+                          'SENSITIVITY', '${s.sensitivity.toStringAsFixed(1)}X'),
+                      _settingsSlider(s.sensitivity, 0.4, 2.4, (v) {
+                        s.sensitivity = v;
+                        onChanged();
+                      }),
+                      const SizedBox(height: 16),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _settingsLabel('FPS COUNTER'),
+                            GestureDetector(
+                              onTap: () {
+                                s.showFps = !s.showFps;
+                                onChanged();
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 18, vertical: 8),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: s.showFps
+                                        ? kFg
+                                        : kFg.withValues(alpha: .35),
+                                    width: s.showFps ? 2 : 1,
+                                  ),
+                                ),
+                                child: Text(s.showFps ? 'ON' : 'OFF',
+                                    style: _fgStyle(13)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1317,25 +1585,11 @@ class _HudEditScreenState extends State<_HudEditScreen> {
               child: Text(label,
                   style: _fgStyle(11, weight: FontWeight.w400, spacing: 2))),
           Expanded(
-            child: SliderTheme(
-              data: SliderThemeData(
-                activeTrackColor: kFg,
-                inactiveTrackColor: kFg.withValues(alpha: .2),
-                thumbColor: kFg,
-                overlayColor: kFg.withValues(alpha: .12),
-                trackHeight: 2,
-              ),
-              child: Slider(
-                value: v,
-                min: min,
-                max: max,
-                onChanged: (nv) {
-                  set(nv);
-                  setState(() {});
-                },
-                onChangeEnd: (_) => widget.onChanged(),
-              ),
-            ),
+            child: _settingsSlider(v, min, max, (nv) {
+              set(nv);
+              setState(() {});
+              widget.onChanged();
+            }),
           ),
           SizedBox(width: 44, child: Text(value, style: _fgStyle(11))),
         ],
@@ -1355,7 +1609,8 @@ class _HudEditScreenState extends State<_HudEditScreen> {
             (s.fireX * size.width).clamp(r, size.width - r),
             (s.fireY * size.height).clamp(r, size.height - r),
           );
-    final double op = s.fireOpacity.clamp(0.15, 1.0);
+    // Keep the button findable in the editor even at zero opacity.
+    final double op = math.max(s.fireOpacity, 0.25);
 
     return Stack(
       fit: StackFit.expand,
@@ -1409,7 +1664,7 @@ class _HudEditScreenState extends State<_HudEditScreen> {
               _sliderRow('SIZE', '${(s.fireScale * 100).round()}%',
                   s.fireScale, 0.6, 1.8, (v) => s.fireScale = v),
               _sliderRow('OPACITY', '${(s.fireOpacity * 100).round()}%',
-                  s.fireOpacity, 0.15, 1.0, (v) => s.fireOpacity = v),
+                  s.fireOpacity, 0.0, 1.0, (v) => s.fireOpacity = v),
               const SizedBox(height: 8),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1449,7 +1704,7 @@ class _CrosshairPreviewPainter extends CustomPainter {
   // The value fields exist only so shouldRepaint can detect changes to the
   // (mutable, shared) settings object between frames.
   _CrosshairPreviewPainter(this.color, this.dot, this.length, this.width,
-      this.border, this.borderColor, this.settings);
+      this.border, this.borderColor, this.scale, this.settings);
 
   final Color color;
   final double dot;
@@ -1457,6 +1712,7 @@ class _CrosshairPreviewPainter extends CustomPainter {
   final double width;
   final double border;
   final Color borderColor;
+  final double scale;
   final AppSettings settings;
 
   @override
@@ -1471,7 +1727,8 @@ class _CrosshairPreviewPainter extends CustomPainter {
       oldDelegate.length != length ||
       oldDelegate.width != width ||
       oldDelegate.border != border ||
-      oldDelegate.borderColor != borderColor;
+      oldDelegate.borderColor != borderColor ||
+      oldDelegate.scale != scale;
 }
 
 class _ResultsScreen extends StatelessWidget {
