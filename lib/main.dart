@@ -116,6 +116,7 @@ class AppSettings {
   double crosshairBorder = 0; // outline thickness (px); 0 removes it
   Color crosshairBorderColor = const Color(0xFF000000);
   double sensitivity = 1.0;
+  double fov = 50; // degrees across the screen's shortest side
 
   // HUD layout. Negative coords mean "default position" (bottom-right).
   double fireX = -1; // normalized 0..1 center of the FIRE button
@@ -139,6 +140,7 @@ class AppSettings {
     crosshairBorderColor =
         Color(prefs.getInt('crosshair_border_color') ?? 0xFF000000);
     sensitivity = prefs.getDouble('sensitivity') ?? 1.0;
+    fov = prefs.getDouble('fov') ?? 50;
     fireX = prefs.getDouble('fire_x') ?? -1;
     fireY = prefs.getDouble('fire_y') ?? -1;
     fireScale = prefs.getDouble('fire_scale') ?? 1.0;
@@ -160,6 +162,7 @@ class AppSettings {
     await prefs.setInt(
         'crosshair_border_color', crosshairBorderColor.toARGB32());
     await prefs.setDouble('sensitivity', sensitivity);
+    await prefs.setDouble('fov', fov);
     await prefs.setDouble('fire_x', fireX);
     await prefs.setDouble('fire_y', fireY);
     await prefs.setDouble('fire_scale', fireScale);
@@ -207,6 +210,37 @@ void drawCrosshair(Canvas canvas, Offset center, AppSettings s) {
     }
     canvas.drawCircle(center, dotR, Paint()..color = s.crosshairColor);
   }
+}
+
+/// Neutral fire button: plain gray ring and face with a bullet glyph.
+/// Deliberately colorless and static — no accent tint, no press lighting.
+void drawFireButton(Canvas canvas, Offset c, double r, double op) {
+  final Paint face = Paint()
+    ..color = const Color(0xFF54595F).withValues(alpha: 0.30 * op);
+  final Paint ring = Paint()
+    ..color = const Color(0xFF9AA0A6).withValues(alpha: 0.9 * op)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 2;
+  final Paint glyph = Paint()
+    ..color = const Color(0xFFC2C7CD).withValues(alpha: op);
+  canvas.drawCircle(c, r, face);
+  canvas.drawCircle(c, r, ring);
+  // Cartridge pointing up: ogive tip, straight body, slightly wider rim.
+  final double h = r * 1.05, w = r * 0.42;
+  final Path bullet = Path()
+    ..moveTo(c.dx - w / 2, c.dy - h * 0.02)
+    ..quadraticBezierTo(c.dx - w / 2, c.dy - h * 0.36, c.dx, c.dy - h * 0.5)
+    ..quadraticBezierTo(
+        c.dx + w / 2, c.dy - h * 0.36, c.dx + w / 2, c.dy - h * 0.02)
+    ..lineTo(c.dx + w / 2, c.dy + h * 0.26)
+    ..lineTo(c.dx - w / 2, c.dy + h * 0.26)
+    ..close();
+  canvas.drawPath(bullet, glyph);
+  canvas.drawRect(
+    Rect.fromLTRB(
+        c.dx - w * 0.66, c.dy + h * 0.32, c.dx + w * 0.66, c.dy + h * 0.44),
+    glyph,
+  );
 }
 
 class RoundStats {
@@ -543,6 +577,7 @@ class GameEngine extends ChangeNotifier {
   double yaw = 0;
   double pitch = 0;
   double sensitivity = 1.0;
+  double fov = 50; // degrees
 
   // Transient feedback timer (seconds remaining).
   double hitT = 0; // hit marker after a kill
@@ -553,7 +588,8 @@ class GameEngine extends ChangeNotifier {
   double get timeLeft =>
       (kRoundSeconds - clock).clamp(0, kRoundSeconds).toDouble();
 
-  double get focal => arena.shortestSide * 1.1;
+  double get focal =>
+      arena.shortestSide * 0.5 / math.tan(fov * math.pi / 360);
 
   // Fire button geometry (player-adjustable via Customise HUD).
   double get fireR =>
@@ -722,6 +758,7 @@ class _GameScreenState extends State<GameScreen>
     super.initState();
     _game = GameEngine(onFinished: widget.onFinished)
       ..sensitivity = widget.settings.sensitivity
+      ..fov = widget.settings.fov
       ..fireXNorm = widget.settings.fireX
       ..fireYNorm = widget.settings.fireY
       ..fireScale = widget.settings.fireScale
@@ -1203,16 +1240,7 @@ class _GamePainter extends CustomPainter {
   void _paintFireButton(Canvas canvas) {
     final double op = game.fireOpacity.clamp(0.0, 1.0);
     if (op <= 0.01) return; // fully transparent: invisible but still tappable
-    final Offset c = game.fireCenter;
-    final double r = game.fireR;
-    final Paint ring = Paint()
-      ..color = settings.arenaAccent.withValues(alpha: op)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5;
-    final Paint fill =
-        Paint()..color = settings.arenaAccent.withValues(alpha: op);
-    canvas.drawCircle(c, r, ring);
-    canvas.drawCircle(c, r * (game.firePressed ? 0.82 : 0.30), fill);
+    drawFireButton(canvas, game.fireCenter, game.fireR, op);
   }
 
   @override
@@ -1712,6 +1740,11 @@ class _GeneralSettingsScreen extends StatelessWidget {
                         s.sensitivity = v;
                         onChanged();
                       }),
+                      _settingsSliderRow('FOV', '${s.fov.round()}°'),
+                      _settingsSlider(s.fov, 40, 100, (v) {
+                        s.fov = v;
+                        onChanged();
+                      }),
                       const SizedBox(height: 16),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -1823,6 +1856,7 @@ class _HudEditScreenState extends State<_HudEditScreen> {
           left: c.dx - r,
           top: c.dy - r,
           child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onPanUpdate: (d) {
               setState(() {
                 s.fireX = ((c.dx + d.delta.dx) / size.width).clamp(0.0, 1.0);
@@ -1830,24 +1864,9 @@ class _HudEditScreenState extends State<_HudEditScreen> {
               });
             },
             onPanEnd: (_) => widget.onChanged(),
-            child: Container(
-              width: r * 2,
-              height: r * 2,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border:
-                    Border.all(color: kFg.withValues(alpha: op), width: 2.5),
-              ),
-              child: Center(
-                child: Container(
-                  width: r * 0.6,
-                  height: r * 0.6,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: kFg.withValues(alpha: op),
-                  ),
-                ),
-              ),
+            child: CustomPaint(
+              size: Size.square(r * 2),
+              painter: _FireButtonPreviewPainter(op),
             ),
           ),
         ),
@@ -1899,6 +1918,20 @@ class _HudEditScreenState extends State<_HudEditScreen> {
       ],
     );
   }
+}
+
+class _FireButtonPreviewPainter extends CustomPainter {
+  _FireButtonPreviewPainter(this.opacity);
+
+  final double opacity;
+
+  @override
+  void paint(Canvas canvas, Size size) => drawFireButton(
+      canvas, size.center(Offset.zero), size.shortestSide / 2, opacity);
+
+  @override
+  bool shouldRepaint(_FireButtonPreviewPainter oldDelegate) =>
+      oldDelegate.opacity != opacity;
 }
 
 class _CrosshairPreviewPainter extends CustomPainter {
