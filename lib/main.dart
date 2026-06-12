@@ -1627,82 +1627,95 @@ class _MenuScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const _Crosshair(size: 72),
-          const SizedBox(height: 28),
-          Text('AIM TRAINER',
-              style: _fgStyle(34, weight: FontWeight.w800, spacing: 8)),
-          const SizedBox(height: 10),
-          Row(
+    return SafeArea(
+      child: Center(
+        // Scale the whole menu down uniformly when the screen is too short,
+        // instead of clipping or scrolling.
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              RankBadge(rank: rankFor(best), size: 24),
-              const SizedBox(width: 10),
-              Text('BEST  $best', style: _fgStyle(16)),
+              const SizedBox(height: 12),
+              const _Crosshair(size: 52),
+              const SizedBox(height: 14),
+              Text('AIM TRAINER',
+                  style: _fgStyle(30, weight: FontWeight.w800, spacing: 8)),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RankBadge(rank: rankFor(best), size: 22),
+                  const SizedBox(width: 10),
+                  Text('BEST  $best', style: _fgStyle(15)),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    onPressed: () => onScenario(
+                        (scenario - 1 + kScenarios.length) %
+                            kScenarios.length),
+                    icon: const Icon(Icons.chevron_left, color: kFg),
+                  ),
+                  SizedBox(
+                    width: 160,
+                    child: Text(
+                      kScenarios[scenario],
+                      textAlign: TextAlign.center,
+                      style: _fgStyle(17, spacing: 6),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () =>
+                        onScenario((scenario + 1) % kScenarios.length),
+                    icon: const Icon(Icons.chevron_right, color: kFg),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              OutlinedButton(
+                style: _buttonStyle(),
+                onPressed: onStart,
+                child: const Text('START'),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    onPressed: onProfile,
+                    child: Text('PROFILE',
+                        style:
+                            _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+                  ),
+                  const SizedBox(width: 16),
+                  TextButton(
+                    onPressed: onRanks,
+                    child: Text('RANKS',
+                        style:
+                            _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+                  ),
+                  const SizedBox(width: 16),
+                  TextButton(
+                    onPressed: onSettings,
+                    child: Text('SETTINGS',
+                        style:
+                            _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'SWIPE TO AIM — TAP FIRE TO SHOOT',
+                style: _fgStyle(11, weight: FontWeight.w400, spacing: 3),
+              ),
+              const SizedBox(height: 12),
             ],
           ),
-          const SizedBox(height: 36),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                onPressed: () => onScenario(
-                    (scenario - 1 + kScenarios.length) % kScenarios.length),
-                icon: const Icon(Icons.chevron_left, color: kFg),
-              ),
-              SizedBox(
-                width: 160,
-                child: Text(
-                  kScenarios[scenario],
-                  textAlign: TextAlign.center,
-                  style: _fgStyle(18, spacing: 6),
-                ),
-              ),
-              IconButton(
-                onPressed: () =>
-                    onScenario((scenario + 1) % kScenarios.length),
-                icon: const Icon(Icons.chevron_right, color: kFg),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          OutlinedButton(
-            style: _buttonStyle(),
-            onPressed: onStart,
-            child: const Text('START'),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextButton(
-                onPressed: onProfile,
-                child: Text('PROFILE',
-                    style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
-              ),
-              const SizedBox(width: 16),
-              TextButton(
-                onPressed: onRanks,
-                child: Text('RANKS',
-                    style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
-              ),
-              const SizedBox(width: 16),
-              TextButton(
-                onPressed: onSettings,
-                child: Text('SETTINGS',
-                    style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'SWIPE TO AIM — TAP FIRE TO SHOOT',
-            style: _fgStyle(12, weight: FontWeight.w400, spacing: 3),
-          ),
-        ],
+        ),
       ),
     );
   }
