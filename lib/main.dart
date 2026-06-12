@@ -33,8 +33,11 @@ const double kCubeHalf = 0.5; // target cube half-extent (world units)
 const double kSphereR = 0.27; // FLOAT 360 sphere radius (world units)
 // REACTIVE pill target dimensions (world units).
 const double kPillR = 0.24; // capsule radius
-const double kPillHalfH = 0.64; // half-length of the capsule's core segment
-const double kPillYC = 0.3; // vertical center (relative to eye height)
+// Sized so the capsule stands on the floor yet its top reaches the same
+// height (1.18 world units) it had when it floated.
+const double kPillHalfH = 1.2; // half-length of the capsule's core segment
+// Vertical center set so the capsule's bottom cap rests on the floor.
+const double kPillYC = kRoomFloor + kPillHalfH + kPillR;
 const double kLookSens = 0.0042; // radians per logical pixel of swipe
 const double kPitchLimit = 1.1; // radians
 const double kNearPlane = 0.2;
@@ -638,10 +641,11 @@ class GameEngine extends ChangeNotifier {
   final List<TargetCube> targets = <TargetCube>[];
 
   RoundStats stats = RoundStats();
-  double clock = 0; // seconds since countdown ended
-  double countdown = 3;
+  double clock = 0; // seconds since the round began
+  bool started = false; // round begins on the first FIRE press
   bool running = true;
   bool paused = false;
+  double _autoFireT = 0; // cooldown for held-trigger fire in tracking modes
   Size arena = Size.zero;
   int scenario = 0; // index into kScenarios
 
@@ -694,7 +698,7 @@ class GameEngine extends ChangeNotifier {
 
   // Fire button geometry (player-adjustable via Customise HUD).
   double get fireR =>
-      (arena.shortestSide * 0.115 * fireScale).clamp(28.0, 90.0);
+      (arena.shortestSide * 0.115 * fireScale).clamp(28.0, 200.0);
   Offset get fireCenter {
     if (fireXNorm < 0 || fireYNorm < 0) {
       return Offset(arena.width - fireR - 26, arena.height - fireR - 30);
@@ -733,8 +737,13 @@ class GameEngine extends ChangeNotifier {
   void update(double dt) {
     if (!running || paused) return;
     if (hitT > 0) hitT -= dt;
-    if (countdown > 0) {
-      countdown -= dt;
+    if (!started) {
+      // Pre-round: targets are already placed and visible, just frozen.
+      if (scenario == 0 && arena != Size.zero) {
+        while (targets.length < kMaxTargets) {
+          targets.add(_spawn());
+        }
+      }
       notifyListeners();
       return;
     }
@@ -746,6 +755,13 @@ class GameEngine extends ChangeNotifier {
     } else if (arena != Size.zero) {
       while (targets.length < kMaxTargets) {
         targets.add(_spawn());
+      }
+    }
+    // Tracking modes: a held trigger fires full-auto.
+    if (scenario != 0 && firePressed) {
+      _autoFireT -= dt;
+      if (_autoFireT <= 0) {
+        shoot();
       }
     }
     if (clock >= kRoundSeconds) {
@@ -796,7 +812,7 @@ class GameEngine extends ChangeNotifier {
       // Erratic legs: random duration means random strafe distances —
       // short jukes through committed runs. Strafe and depth are picked
       // with identical (uniform, symmetric) probability.
-      _rRetargetT = 0.13 + _rng.nextDouble() * 0.63;
+      _rRetargetT = 0.11 + _rng.nextDouble() * 0.52;
       const double topStrafe = 5.6; // linear world units/s
       const double topDepth = 3.6;
       // Strafe legs always commit to full speed — only the direction is
@@ -841,9 +857,10 @@ class GameEngine extends ChangeNotifier {
     return dot > 0 && d2 <= kPillR * kPillR;
   }
 
-  /// Quick grow-in on spawn; targets then live until shot.
+  /// Quick grow-in on spawn; targets then live until shot. Pre-round
+  /// targets stand at full size so the player sees them before starting.
   double halfOf(TargetCube t) {
-    final double age = clock - t.born;
+    final double age = started ? clock - t.born : kGrowTime;
     final double grow =
         Curves.easeOutBack.transform((age / kGrowTime).clamp(0.0, 1.0));
     return kCubeHalf * grow;
@@ -867,7 +884,10 @@ class GameEngine extends ChangeNotifier {
 
   /// Ray-AABB slab test from the crosshair; nearest hit wins.
   void shoot() {
-    if (!running || paused || countdown > 0) return;
+    if (!running || paused) return;
+    // The first trigger pull starts the clock AND counts as a real shot.
+    started = true;
+    _autoFireT = 0.1; // full-auto cadence (10 rounds/s) while held
     HapticFeedback.selectionClick();
     if (scenario == 2) {
       final double cp2 = math.cos(pitch);
@@ -1183,8 +1203,8 @@ class _GamePainter extends CustomPainter {
       _CachedText(20, color: settings.arenaAccent);
   late final _CachedText _timeText =
       _CachedText(20, color: settings.arenaAccent);
-  late final _CachedText _countText =
-      _CachedText(96, weight: FontWeight.w800, color: settings.arenaAccent);
+  late final _CachedText _promptText =
+      _CachedText(20, color: settings.arenaAccent);
   late final _CachedText _fpsText =
       _CachedText(13, weight: FontWeight.w400, color: settings.arenaAccent);
 
@@ -1460,12 +1480,9 @@ class _GamePainter extends CustomPainter {
       fps.paint(canvas, Offset(20, size.height - fps.height - 16));
     }
 
-    if (game.countdown > 0) {
-      final TextPainter tp = _countText.of('${game.countdown.ceil()}');
-      tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2));
-      _paintPauseButton(canvas);
-      _paintFireButton(canvas);
-      return;
+    if (!game.started) {
+      final TextPainter tp = _promptText.of('PRESS FIRE TO START');
+      tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2 - 70));
     }
 
     if (game.scenario == 1) {
@@ -2037,7 +2054,7 @@ class _GeneralSettingsScreen extends StatelessWidget {
                         onChanged();
                       }),
                       _settingsSliderRow('FOV', '${s.fov.round()}°'),
-                      _settingsSlider(s.fov, 40, 100, (v) {
+                      _settingsSlider(s.fov, 40, 120, (v) {
                         s.fov = v;
                         onChanged();
                       }),
@@ -2132,7 +2149,7 @@ class _HudEditScreenState extends State<_HudEditScreen> {
     final AppSettings s = widget.settings;
     final Size size = MediaQuery.sizeOf(context);
     final double r =
-        (size.shortestSide * 0.115 * s.fireScale).clamp(28.0, 90.0);
+        (size.shortestSide * 0.115 * s.fireScale).clamp(28.0, 200.0);
     final Offset c = (s.fireX < 0 || s.fireY < 0)
         ? Offset(size.width - r - 26, size.height - r - 30)
         : Offset(
