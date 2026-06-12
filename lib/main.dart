@@ -31,6 +31,10 @@ const double kGrowTime = 0.1;
 // 3D tuning.
 const double kCubeHalf = 0.5; // target cube half-extent (world units)
 const double kSphereR = 0.27; // FLOAT 360 sphere radius (world units)
+// REACTIVE pill target dimensions (world units).
+const double kPillR = 0.24; // capsule radius
+const double kPillHalfH = 0.64; // half-length of the capsule's core segment
+const double kPillYC = 0.3; // vertical center (relative to eye height)
 const double kLookSens = 0.0042; // radians per logical pixel of swipe
 const double kPitchLimit = 1.1; // radians
 const double kNearPlane = 0.2;
@@ -92,7 +96,7 @@ enum _Screen {
   results,
 }
 
-const List<String> kScenarios = ['CUBES', 'FLOAT 360'];
+const List<String> kScenarios = ['CUBES', 'FLOAT 360', 'REACTIVE'];
 
 const List<Color> kBorderColors = [Color(0xFF000000), ...kTargetColors];
 
@@ -654,6 +658,16 @@ class GameEngine extends ChangeNotifier {
   double get sphereY => sDist * math.sin(sEl);
   double get sphereZ => sDist * math.cos(sEl) * math.cos(sAz);
 
+  // REACTIVE state: a pill that orbit-strafes around the centered player and
+  // pushes in/out. Erratic leg lengths, snappy accel/decel.
+  double rAz = 0, rDist = 3.5; // position (azimuth, distance)
+  double rvS = 0, rvD = 0; // strafe (linear u/s) and depth velocities
+  double rtS = 0, rtD = 0; // velocities the easing chases
+  double _rRetargetT = 0;
+
+  double get rpX => rDist * math.sin(rAz);
+  double get rpZ => rDist * math.cos(rAz);
+
   // HUD layout, copied from AppSettings at round start.
   double fireXNorm = -1;
   double fireYNorm = -1;
@@ -727,6 +741,8 @@ class GameEngine extends ChangeNotifier {
     clock += dt;
     if (scenario == 1) {
       _updateFloat(dt);
+    } else if (scenario == 2) {
+      _updateReactive(dt);
     } else if (arena != Size.zero) {
       while (targets.length < kMaxTargets) {
         targets.add(_spawn());
@@ -774,6 +790,57 @@ class GameEngine extends ChangeNotifier {
     }
   }
 
+  void _updateReactive(double dt) {
+    _rRetargetT -= dt;
+    if (_rRetargetT <= 0) {
+      // Erratic legs: random duration means random strafe distances —
+      // short jukes through committed runs. Strafe and depth are picked
+      // with identical (uniform, symmetric) probability.
+      _rRetargetT = 0.13 + _rng.nextDouble() * 0.63;
+      const double topStrafe = 5.6; // linear world units/s
+      const double topDepth = 3.6;
+      // Strafe legs always commit to full speed — only the direction is
+      // random, so the pill never dawdles at low velocity.
+      rtS = (_rng.nextBool() ? 1 : -1) * topStrafe;
+      rtD = (_rng.nextBool() ? 1 : -1) *
+          (0.4 + _rng.nextDouble() * 0.6) *
+          topDepth;
+    }
+    // Snappy easing: hits top speed (and stops) fast.
+    final double k = math.min(1, dt * 7.2);
+    rvS += (rtS - rvS) * k;
+    rvD += (rtD - rvD) * k;
+    rAz += rvS / rDist * dt; // constant linear strafe speed at any distance
+    rDist += rvD * dt;
+    // Close-range band, after KovaaK's "Close Fast Strafes Invincible".
+    if (rDist > 4.5) {
+      rDist = 4.5;
+      rtD = -rtD.abs();
+    } else if (rDist < 2.5) {
+      rDist = 2.5;
+      rtD = rtD.abs();
+    }
+  }
+
+  /// Ray-capsule test against the pill (vertical capsule at rpX/rpZ).
+  bool _hitPill(double fx, double fy, double fz) {
+    final double dd = fx * fx + fz * fz;
+    if (dd < 1e-9) return false; // looking straight up/down
+    // Closest approach of the ray to the pill's vertical axis, in XZ.
+    final double t = (rpX * fx + rpZ * fz) / dd;
+    if (t < 0) return false;
+    final double ex = rpX - fx * t, ez = rpZ - fz * t;
+    if (ex * ex + ez * ez > kPillR * kPillR) return false;
+    final double yAt = fy * t;
+    final double yLo = kPillYC - kPillHalfH, yHi = kPillYC + kPillHalfH;
+    if (yAt >= yLo && yAt <= yHi) return true;
+    // Near an end: test the cap sphere.
+    final double cy = yAt < yLo ? yLo : yHi;
+    final double dot = rpX * fx + cy * fy + rpZ * fz;
+    final double d2 = rpX * rpX + cy * cy + rpZ * rpZ - dot * dot;
+    return dot > 0 && d2 <= kPillR * kPillR;
+  }
+
   /// Quick grow-in on spawn; targets then live until shot.
   double halfOf(TargetCube t) {
     final double age = clock - t.born;
@@ -802,6 +869,22 @@ class GameEngine extends ChangeNotifier {
   void shoot() {
     if (!running || paused || countdown > 0) return;
     HapticFeedback.selectionClick();
+    if (scenario == 2) {
+      final double cp2 = math.cos(pitch);
+      final bool hit =
+          _hitPill(cp2 * math.sin(yaw), math.sin(pitch), cp2 * math.cos(yaw));
+      if (hit) {
+        stats.hits++;
+        stats.sumKillMs += (clock - _lastHitClock) * 1000;
+        _lastHitClock = clock;
+        hitT = 0.18;
+        HapticFeedback.lightImpact();
+      } else {
+        stats.misses++;
+      }
+      notifyListeners();
+      return;
+    }
     if (scenario == 1) {
       // Ray-sphere: does the forward ray pass within the sphere's radius?
       final (double cx, double cyy, double cz) =
@@ -1130,7 +1213,7 @@ class _GamePainter extends CustomPainter {
   void _paintWalls(Canvas canvas, Size size) {
     final double cx = size.width / 2, cy = size.height / 2, fo = game.focal;
     final List<List<(double, double, double)>> walls =
-        game.scenario == 1 ? _wallsFloat : _wallsCubes;
+        game.scenario == 0 ? _wallsCubes : _wallsFloat;
     for (final List<(double, double, double)> wall in walls) {
       final List<(double, double, double)> cam = [
         for (final (double x, double y, double z) in wall)
@@ -1319,6 +1402,45 @@ class _GamePainter extends CustomPainter {
     canvas.drawPath(silhouette, _cubeEdge);
   }
 
+  /// REACTIVE target: capsule rendered as a round-capped line — body in a
+  /// darker shade with an offset lit core, dark silhouette outline.
+  void _paintPill(Canvas canvas, Size size) {
+    final (double x1, double y1, double z1) =
+        game.toCamera(game.rpX, kPillYC + kPillHalfH, game.rpZ);
+    final (double x2, double y2, double z2) =
+        game.toCamera(game.rpX, kPillYC - kPillHalfH, game.rpZ);
+    if (z1 <= kNearPlane || z2 <= kNearPlane) return;
+    final double cx = size.width / 2, cy = size.height / 2, fo = game.focal;
+    final Offset top = Offset(cx + fo * x1 / z1, cy - fo * y1 / z1);
+    final Offset bottom = Offset(cx + fo * x2 / z2, cy - fo * y2 / z2);
+    final double r = fo * kPillR * 2 / (z1 + z2);
+    canvas.drawLine(
+      top,
+      bottom,
+      Paint()
+        ..color = settings.arenaBg
+        ..strokeWidth = 2 * r + 4
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.drawLine(
+      top,
+      bottom,
+      Paint()
+        ..color = _shadeBottom
+        ..strokeWidth = 2 * r
+        ..strokeCap = StrokeCap.round,
+    );
+    final Offset lift = Offset(-r * 0.22, -r * 0.22);
+    canvas.drawLine(
+      top + lift,
+      bottom + lift,
+      Paint()
+        ..color = settings.targetColor
+        ..strokeWidth = 2 * r * 0.6
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     game.arena = size;
@@ -1327,7 +1449,7 @@ class _GamePainter extends CustomPainter {
 
     // The room: just its edge lines, no surface tiling.
     for (final (double ax, double ay, double az, double bx, double by,
-        double bz) in (game.scenario == 1 ? _roomFloat : _roomCubes)) {
+        double bz) in (game.scenario == 0 ? _roomCubes : _roomFloat)) {
       _worldLine(canvas, size, ax, ay, az, bx, by, bz, _edgePaint);
     }
 
@@ -1348,6 +1470,8 @@ class _GamePainter extends CustomPainter {
 
     if (game.scenario == 1) {
       _paintSphere(canvas, size);
+    } else if (game.scenario == 2) {
+      _paintPill(canvas, size);
     } else {
       // Targets, far-to-near (they share a wall plane, so center-distance
       // ordering is fine).
