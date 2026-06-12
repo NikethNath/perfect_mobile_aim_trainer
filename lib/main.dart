@@ -90,6 +90,7 @@ class AimTrainerApp extends StatelessWidget {
 enum _Screen {
   menu,
   profile,
+  ranks,
   settings,
   settingsCrosshair,
   settingsColors,
@@ -269,25 +270,37 @@ class RoundStats {
 // Rank ladder. Thresholds are on the hits*sqrt(accuracy) score.
 // ---------------------------------------------------------------------------
 class Rank {
-  const Rank(this.name, this.threshold, this.color);
+  const Rank(this.name, this.threshold, this.color, this.blurb);
 
   final String name;
   final int threshold;
   final Color color;
+  final String blurb;
 }
 
 const List<Rank> kRanks = [
-  Rank('BRONZE', 20, Color(0xFFCD7F32)),
-  Rank('SILVER', 40, Color(0xFFC8CDD4)),
-  Rank('GOLD', 62, Color(0xFFFFD24A)),
-  Rank('PLATINUM', 88, Color(0xFF5CE1E6)),
-  Rank('DIAMOND', 118, Color(0xFFB9E8FF)),
-  Rank('EMERALD', 152, Color(0xFF2ECC71)),
-  Rank('RUBY', 190, Color(0xFFE0356F)),
-  Rank('MASTER', 235, Color(0xFFB57BFF)),
-  Rank('GRANDMASTER', 290, Color(0xFFFF5C5C)),
-  Rank('ASTRA', 350, Color(0xFF8FD0FF)),
-  Rank('CELESTIAL', 400, Color(0xFFEFFBFF)),
+  Rank('BRONZE', 20, Color(0xFFCD7F32),
+      'Just starting out. Aim is mostly hope at this stage.'),
+  Rank('SILVER', 40, Color(0xFFC8CDD4),
+      'You hit targets... eventually. A long road ahead.'),
+  Rank('GOLD', 62, Color(0xFFFFD24A),
+      'Average phone-gamer aim. Functional, nothing more.'),
+  Rank('PLATINUM', 88, Color(0xFF5CE1E6),
+      'Slightly above average. The real grind starts here.'),
+  Rank('DIAMOND', 118, Color(0xFFB9E8FF),
+      "Decent. But 'good' is still a few tiers up."),
+  Rank('EMERALD', 152, Color(0xFF2ECC71),
+      'The dedicated grinder. Training is paying off — top ~10% territory.'),
+  Rank('RUBY', 190, Color(0xFFE0356F),
+      'Semi-competitive mechanics. Flicks and tracking are second nature.'),
+  Rank('MASTER', 235, Color(0xFFB57BFF),
+      'Elite. Tournament-grade aim under full pressure.'),
+  Rank('GRANDMASTER', 290, Color(0xFFFF5C5C),
+      'Feared. Among the best aimers on mobile, period.'),
+  Rank('ASTRA', 350, Color(0xFF8FD0FF),
+      "Approaching the human ceiling. Reflexes most people can't comprehend."),
+  Rank('CELESTIAL', 400, Color(0xFFEFFBFF),
+      'The summit. A handful of humans on Earth. Prove it.'),
 ];
 
 /// Highest rank whose threshold the score meets, or null when unranked.
@@ -567,10 +580,16 @@ class _HomeFlowState extends State<HomeFlow> {
             onScenario: (i) => setState(() => _scenario = i),
             onStart: () => setState(() => _screen = _Screen.playing),
             onProfile: () => setState(() => _screen = _Screen.profile),
+            onRanks: () => setState(() => _screen = _Screen.ranks),
             onSettings: () => setState(() => _screen = _Screen.settings),
           ),
         _Screen.profile => _ProfileScreen(
             bests: _bests,
+            onBack: () => setState(() => _screen = _Screen.menu),
+          ),
+        _Screen.ranks => _RanksScreen(
+            current: rankFor(
+                _bests.values.fold(0, (a, b) => math.max(a, b))),
             onBack: () => setState(() => _screen = _Screen.menu),
           ),
         _Screen.settings => _SettingsScreen(
@@ -1594,6 +1613,7 @@ class _MenuScreen extends StatelessWidget {
     required this.onScenario,
     required this.onStart,
     required this.onProfile,
+    required this.onRanks,
     required this.onSettings,
   });
 
@@ -1602,6 +1622,7 @@ class _MenuScreen extends StatelessWidget {
   final ValueChanged<int> onScenario;
   final VoidCallback onStart;
   final VoidCallback onProfile;
+  final VoidCallback onRanks;
   final VoidCallback onSettings;
 
   @override
@@ -1660,6 +1681,12 @@ class _MenuScreen extends StatelessWidget {
               TextButton(
                 onPressed: onProfile,
                 child: Text('PROFILE',
+                    style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+              ),
+              const SizedBox(width: 16),
+              TextButton(
+                onPressed: onRanks,
+                child: Text('RANKS',
                     style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
               ),
               const SizedBox(width: 16),
@@ -2377,6 +2404,106 @@ class _ResultsScreen extends StatelessWidget {
             Text(value, style: _fgStyle(14)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ranks showcase — the full ladder, badges, and what each tier means. The
+// player's current rank (best across scenarios) is highlighted.
+// ---------------------------------------------------------------------------
+class _RanksScreen extends StatelessWidget {
+  const _RanksScreen({required this.current, required this.onBack});
+
+  final Rank? current;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        children: [
+          _settingsHeader('RANKS', onBack),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 4),
+                      for (final Rank r in kRanks.reversed) _rankRow(r),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _rankRow(Rank r) {
+    final bool isCurrent = r == current;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: isCurrent ? r.color : kFg.withValues(alpha: .18),
+          width: isCurrent ? 2 : 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          RankBadge(rank: r, size: 46),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      r.name,
+                      style: TextStyle(
+                        color: r.color,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 4,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text('${r.threshold}+',
+                        style: _fgStyle(12, weight: FontWeight.w400)),
+                    if (isCurrent) ...[
+                      const Spacer(),
+                      Text('YOU',
+                          style: TextStyle(
+                            color: r.color,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 3,
+                          )),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  r.blurb,
+                  style: TextStyle(
+                    color: kFg.withValues(alpha: .75),
+                    fontSize: 12,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
