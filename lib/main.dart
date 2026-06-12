@@ -30,6 +30,7 @@ const double kGrowTime = 0.1;
 
 // 3D tuning.
 const double kCubeHalf = 0.5; // target cube half-extent (world units)
+const double kSphereR = 0.27; // FLOAT 360 sphere radius (world units)
 const double kLookSens = 0.0042; // radians per logical pixel of swipe
 const double kPitchLimit = 1.1; // radians
 const double kNearPlane = 0.2;
@@ -41,6 +42,8 @@ const double kRoomFloor = -1.7; // eye height 1.7 above the floor
 const double kRoomCeil = 6.3;
 const double kRoomFront = -1; // wall right behind the player
 const double kRoomBack = 14; // target wall
+// FLOAT 360 uses a room centered on the player so the sphere can orbit.
+const double kFloatHalfD = 7.5; // room depth +/- around the player
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -89,7 +92,7 @@ enum _Screen {
   results,
 }
 
-const List<String> kScenarios = ['CUBES'];
+const List<String> kScenarios = ['CUBES', 'FLOAT 360'];
 
 const List<Color> kBorderColors = [Color(0xFF000000), ...kTargetColors];
 
@@ -267,13 +270,16 @@ class Rank {
 }
 
 const List<Rank> kRanks = [
-  Rank('CADET', 25, Color(0xFF9BA8A0)),
-  Rank('BRONZE', 50, Color(0xFFCD7F32)),
-  Rank('SILVER', 85, Color(0xFFC8CDD4)),
-  Rank('GOLD', 135, Color(0xFFFFD24A)),
-  Rank('PLATINUM', 195, Color(0xFF5CE1E6)),
-  Rank('MASTER', 265, Color(0xFFB57BFF)),
-  Rank('GRANDMASTER', 330, Color(0xFFFF5C5C)),
+  Rank('BRONZE', 20, Color(0xFFCD7F32)),
+  Rank('SILVER', 40, Color(0xFFC8CDD4)),
+  Rank('GOLD', 62, Color(0xFFFFD24A)),
+  Rank('PLATINUM', 88, Color(0xFF5CE1E6)),
+  Rank('DIAMOND', 118, Color(0xFFB9E8FF)),
+  Rank('EMERALD', 152, Color(0xFF2ECC71)),
+  Rank('RUBY', 190, Color(0xFFE0356F)),
+  Rank('MASTER', 235, Color(0xFFB57BFF)),
+  Rank('GRANDMASTER', 290, Color(0xFFFF5C5C)),
+  Rank('ASTRA', 350, Color(0xFF8FD0FF)),
   Rank('CELESTIAL', 400, Color(0xFFEFFBFF)),
 ];
 
@@ -344,15 +350,13 @@ class _RankBadgePainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round;
 
     switch (kRanks.indexOf(rank!)) {
-      case 0: // Cadet: one chevron
+      case 0: // Bronze: one chevron
         _chevrons(canvas, c, r, 1, stroke);
-      case 1: // Bronze: two chevrons
+      case 1: // Silver: two chevrons
         _chevrons(canvas, c, r, 2, stroke);
-      case 2: // Silver: three chevrons
+      case 2: // Gold: three chevrons
         _chevrons(canvas, c, r, 3, stroke);
-      case 3: // Gold: diamond
-        _diamond(canvas, c, r, fill, stroke);
-      case 4: // Platinum: winged diamond
+      case 3: // Platinum: winged diamond
         _diamond(canvas, c, r * 0.82, fill, stroke);
         for (final double s in [-1, 1]) {
           final Path wing = Path()
@@ -361,12 +365,25 @@ class _RankBadgePainter extends CustomPainter {
             ..lineTo(c.dx + s * r * 0.55, c.dy - r * 0.30);
           canvas.drawPath(wing, stroke);
         }
-      case 5: // Master: star
+      case 4: // Diamond: classic rhombus
+        _diamond(canvas, c, r, fill, stroke);
+      case 5: // Emerald: emerald-cut hexagon
+        _hexagon(canvas, c, r, fill, stroke);
+      case 6: // Ruby: faceted gemstone
+        _gem(canvas, c, r, fill, stroke);
+      case 7: // Master: star
         canvas.drawPath(_star(c, r * 0.72), fill);
-      case 6: // Grandmaster: star in a ring
+      case 8: // Grandmaster: star in a ring
         canvas.drawPath(_star(c, r * 0.52), fill);
         canvas.drawCircle(c, r * 0.78, stroke);
-      case 7: // Celestial: radiant star in a ring
+      case 9: // Astra: four-point sparkle with twin glints
+        canvas.drawPath(_sparkle(c, r * 0.8), fill);
+        final Paint glint = Paint()..color = col;
+        canvas.drawCircle(
+            c + Offset(r * 0.55, -r * 0.55), r * 0.10, glint);
+        canvas.drawCircle(
+            c + Offset(-r * 0.55, r * 0.55), r * 0.07, glint);
+      case 10: // Celestial: radiant star in a ring
         canvas.drawPath(_star(c, r * 0.42), fill);
         canvas.drawCircle(c, r * 0.62, stroke);
         final Paint ray = Paint()
@@ -379,6 +396,61 @@ class _RankBadgePainter extends CustomPainter {
           canvas.drawLine(c + dir * r * 0.74, c + dir * r * 0.95, ray);
         }
     }
+  }
+
+  /// Four-pointed twinkle: outer points on the axes, pinched waist between.
+  static Path _sparkle(Offset c, double r) {
+    final Path path = Path();
+    for (int i = 0; i < 8; i++) {
+      final double radius = i.isEven ? r : r * 0.26;
+      final double a = -math.pi / 2 + i * math.pi / 4;
+      final Offset p = c + Offset(math.cos(a), math.sin(a)) * radius;
+      if (i == 0) {
+        path.moveTo(p.dx, p.dy);
+      } else {
+        path.lineTo(p.dx, p.dy);
+      }
+    }
+    return path..close();
+  }
+
+  static void _hexagon(
+      Canvas canvas, Offset c, double r, Paint fill, Paint stroke) {
+    Path hex(double k) {
+      final Path p = Path();
+      for (int i = 0; i < 6; i++) {
+        final double a = -math.pi / 2 + i * math.pi / 3;
+        final Offset v = c + Offset(math.cos(a), math.sin(a)) * r * 0.68 * k;
+        if (i == 0) {
+          p.moveTo(v.dx, v.dy);
+        } else {
+          p.lineTo(v.dx, v.dy);
+        }
+      }
+      return p..close();
+    }
+
+    canvas.drawPath(hex(1), stroke);
+    canvas.drawPath(hex(0.5), fill);
+  }
+
+  static void _gem(
+      Canvas canvas, Offset c, double r, Paint fill, Paint stroke) {
+    // Classic gemstone: trapezoid crown over a triangular pavilion.
+    final Path gem = Path()
+      ..moveTo(c.dx - r * 0.38, c.dy - r * 0.52)
+      ..lineTo(c.dx + r * 0.38, c.dy - r * 0.52)
+      ..lineTo(c.dx + r * 0.68, c.dy - r * 0.10)
+      ..lineTo(c.dx, c.dy + r * 0.62)
+      ..lineTo(c.dx - r * 0.68, c.dy - r * 0.10)
+      ..close();
+    canvas.drawPath(gem, fill);
+    // Dark facet line separating crown from pavilion.
+    final Paint facet = Paint()
+      ..color = const Color(0xAA000000)
+      ..strokeWidth = math.max(1.2, r * 0.07);
+    canvas.drawLine(Offset(c.dx - r * 0.68, c.dy - r * 0.10),
+        Offset(c.dx + r * 0.68, c.dy - r * 0.10), facet);
   }
 
   static void _chevrons(
@@ -525,6 +597,7 @@ class _HomeFlowState extends State<HomeFlow> {
         _Screen.playing => GameScreen(
             key: ValueKey<int>(_round),
             settings: _settings,
+            scenario: _scenario,
             onFinished: _onRoundFinished,
             onQuit: () => setState(() => _screen = _Screen.menu),
             onRestart: () => setState(() => _round++),
@@ -566,6 +639,20 @@ class GameEngine extends ChangeNotifier {
   bool running = true;
   bool paused = false;
   Size arena = Size.zero;
+  int scenario = 0; // index into kScenarios
+
+  // FLOAT 360 state: one sphere wandering around the player in spherical
+  // coordinates. Velocities ease toward freshly randomized targets, so the
+  // motion accelerates and decelerates gradually — built for tracking.
+  double sAz = 0, sEl = 0.12, sDist = 5.5; // position
+  double vAz = 0, vEl = 0, vDist = 0; // current velocity
+  double tAz = 0.6, tEl = 0, tDist = 0; // velocity the easing chases
+  double _retargetT = 0;
+  double _lastHitClock = 0;
+
+  double get sphereX => sDist * math.cos(sEl) * math.sin(sAz);
+  double get sphereY => sDist * math.sin(sEl);
+  double get sphereZ => sDist * math.cos(sEl) * math.cos(sAz);
 
   // HUD layout, copied from AppSettings at round start.
   double fireXNorm = -1;
@@ -638,7 +725,9 @@ class GameEngine extends ChangeNotifier {
       return;
     }
     clock += dt;
-    if (arena != Size.zero) {
+    if (scenario == 1) {
+      _updateFloat(dt);
+    } else if (arena != Size.zero) {
       while (targets.length < kMaxTargets) {
         targets.add(_spawn());
       }
@@ -648,6 +737,41 @@ class GameEngine extends ChangeNotifier {
       onFinished(stats);
     }
     notifyListeners();
+  }
+
+  void _updateFloat(double dt) {
+    _retargetT -= dt;
+    if (_retargetT <= 0) {
+      _retargetT = 0.3 + _rng.nextDouble() * 0.6;
+      tAz = (_rng.nextDouble() * 2 - 1) * 1.9; // rad/s around the player
+      tEl = (_rng.nextDouble() * 2 - 1) * 0.55;
+      tDist = (_rng.nextDouble() * 2 - 1) * 1.6;
+    }
+    // Ease current velocity toward the target velocity. Punchy (~0.4s time
+    // constant): the sphere lunges into new headings and brakes hard.
+    final double k = math.min(1, dt * 2.5);
+    vAz += (tAz - vAz) * k;
+    vEl += (tEl - vEl) * k;
+    vDist += (tDist - vDist) * k;
+    sAz += vAz * dt;
+    sEl += vEl * dt;
+    sDist += vDist * dt;
+    // Soft bounds: clamp and send the wander target back inward.
+    if (sEl > 0.55) {
+      sEl = 0.55;
+      tEl = -tEl.abs();
+    } else if (sEl < -0.15) {
+      sEl = -0.15;
+      tEl = tEl.abs();
+    }
+    // Keep the sphere inside the centered room (half-width 7, radius 0.55).
+    if (sDist > 6.2) {
+      sDist = 6.2;
+      tDist = -tDist.abs();
+    } else if (sDist < 3.5) {
+      sDist = 3.5;
+      tDist = tDist.abs();
+    }
   }
 
   /// Quick grow-in on spawn; targets then live until shot.
@@ -678,6 +802,22 @@ class GameEngine extends ChangeNotifier {
   void shoot() {
     if (!running || paused || countdown > 0) return;
     HapticFeedback.selectionClick();
+    if (scenario == 1) {
+      // Ray-sphere: does the forward ray pass within the sphere's radius?
+      final (double cx, double cyy, double cz) =
+          toCamera(sphereX, sphereY, sphereZ);
+      if (cz > kNearPlane && math.sqrt(cx * cx + cyy * cyy) <= kSphereR) {
+        stats.hits++;
+        stats.sumKillMs += (clock - _lastHitClock) * 1000;
+        _lastHitClock = clock;
+        hitT = 0.18;
+        HapticFeedback.lightImpact();
+      } else {
+        stats.misses++;
+      }
+      notifyListeners();
+      return;
+    }
     final double cp = math.cos(pitch);
     final double fx = cp * math.sin(yaw);
     final double fy = math.sin(pitch);
@@ -729,12 +869,14 @@ class GameScreen extends StatefulWidget {
   const GameScreen({
     super.key,
     required this.settings,
+    required this.scenario,
     required this.onFinished,
     required this.onQuit,
     required this.onRestart,
   });
 
   final AppSettings settings;
+  final int scenario;
   final void Function(RoundStats) onFinished;
   final VoidCallback onQuit;
   final VoidCallback onRestart;
@@ -757,6 +899,7 @@ class _GameScreenState extends State<GameScreen>
   void initState() {
     super.initState();
     _game = GameEngine(onFinished: widget.onFinished)
+      ..scenario = widget.scenario
       ..sensitivity = widget.settings.sensitivity
       ..fov = widget.settings.fov
       ..fireXNorm = widget.settings.fireX
@@ -962,15 +1105,16 @@ class _GamePainter extends CustomPainter {
   late final _CachedText _fpsText =
       _CachedText(13, weight: FontWeight.w400, color: settings.arenaAccent);
 
-  // The room's six surfaces as world-space quads. Built once.
-  static final List<List<(double, double, double)>> _walls = _buildWalls();
+  // The room's six surfaces as world-space quads, one variant per scenario
+  // (CUBES: player at the front wall; FLOAT 360: player centered). Built once.
+  static final List<List<(double, double, double)>> _wallsCubes =
+      _buildWalls(kRoomFront, kRoomBack);
+  static final List<List<(double, double, double)>> _wallsFloat =
+      _buildWalls(-kFloatHalfD, kFloatHalfD);
 
-  static List<List<(double, double, double)>> _buildWalls() {
-    const double w = kRoomHalfW,
-        f = kRoomFloor,
-        c = kRoomCeil,
-        zf = kRoomFront,
-        zb = kRoomBack;
+  static List<List<(double, double, double)>> _buildWalls(
+      double zf, double zb) {
+    const double w = kRoomHalfW, f = kRoomFloor, c = kRoomCeil;
     return [
       [(-w, f, zf), (w, f, zf), (w, f, zb), (-w, f, zb)], // floor
       [(-w, c, zf), (w, c, zf), (w, c, zb), (-w, c, zb)], // ceiling
@@ -985,7 +1129,9 @@ class _GamePainter extends CustomPainter {
   /// fill with per-vertex colors (GPU-interpolated; no shader allocation).
   void _paintWalls(Canvas canvas, Size size) {
     final double cx = size.width / 2, cy = size.height / 2, fo = game.focal;
-    for (final List<(double, double, double)> wall in _walls) {
+    final List<List<(double, double, double)>> walls =
+        game.scenario == 1 ? _wallsFloat : _wallsCubes;
+    for (final List<(double, double, double)> wall in walls) {
       final List<(double, double, double)> cam = [
         for (final (double x, double y, double z) in wall)
           game.toCamera(x, y, z)
@@ -1026,16 +1172,15 @@ class _GamePainter extends CustomPainter {
 
   static final Paint _wallPaint = Paint();
 
-  // The room: just its 12 edges as world-space segments. Built once.
-  static final List<(double, double, double, double, double, double)> _room =
-      _buildRoom();
+  // The room: just its 12 edges as world-space segments, per scenario.
+  static final List<(double, double, double, double, double, double)>
+      _roomCubes = _buildRoom(kRoomFront, kRoomBack);
+  static final List<(double, double, double, double, double, double)>
+      _roomFloat = _buildRoom(-kFloatHalfD, kFloatHalfD);
 
-  static List<(double, double, double, double, double, double)> _buildRoom() {
-    const double w = kRoomHalfW,
-        f = kRoomFloor,
-        c = kRoomCeil,
-        zf = kRoomFront,
-        zb = kRoomBack;
+  static List<(double, double, double, double, double, double)> _buildRoom(
+      double zf, double zb) {
+    const double w = kRoomHalfW, f = kRoomFloor, c = kRoomCeil;
     final lines = <(double, double, double, double, double, double)>[];
     for (final (double y1, double y2) in [(f, f), (c, c)]) {
       lines.add((-w, y1, zf, w, y2, zf));
@@ -1151,6 +1296,29 @@ class _GamePainter extends CustomPainter {
     }
   }
 
+  /// FLOAT 360 target: shaded ball — dark base with an offset highlight
+  /// clipped to the silhouette.
+  void _paintSphere(Canvas canvas, Size size) {
+    final (double px, double py, double pz) =
+        game.toCamera(game.sphereX, game.sphereY, game.sphereZ);
+    if (pz <= kNearPlane) return;
+    final double cx = size.width / 2, cy = size.height / 2;
+    final double r = game.focal * kSphereR / pz;
+    final Offset c = Offset(cx + game.focal * px / pz, cy - game.focal * py / pz);
+    final Path silhouette = Path()
+      ..addOval(Rect.fromCircle(center: c, radius: r));
+    canvas.save();
+    canvas.clipPath(silhouette);
+    canvas.drawCircle(c, r, Paint()..color = _shadeBottom);
+    canvas.drawCircle(
+      c + Offset(-r * 0.28, -r * 0.28),
+      r * 0.85,
+      Paint()..color = settings.targetColor,
+    );
+    canvas.restore();
+    canvas.drawPath(silhouette, _cubeEdge);
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     game.arena = size;
@@ -1159,7 +1327,7 @@ class _GamePainter extends CustomPainter {
 
     // The room: just its edge lines, no surface tiling.
     for (final (double ax, double ay, double az, double bx, double by,
-        double bz) in _room) {
+        double bz) in (game.scenario == 1 ? _roomFloat : _roomCubes)) {
       _worldLine(canvas, size, ax, ay, az, bx, by, bz, _edgePaint);
     }
 
@@ -1178,16 +1346,20 @@ class _GamePainter extends CustomPainter {
       return;
     }
 
-    // Targets, far-to-near (they share a wall plane, so center-distance
-    // ordering is fine).
-    final List<TargetCube> ordered = List.of(game.targets)
-      ..sort((a, b) {
-        final double da = a.x * a.x + a.y * a.y + a.z * a.z;
-        final double db = b.x * b.x + b.y * b.y + b.z * b.z;
-        return db.compareTo(da);
-      });
-    for (final TargetCube t in ordered) {
-      _paintCube(canvas, size, t);
+    if (game.scenario == 1) {
+      _paintSphere(canvas, size);
+    } else {
+      // Targets, far-to-near (they share a wall plane, so center-distance
+      // ordering is fine).
+      final List<TargetCube> ordered = List.of(game.targets)
+        ..sort((a, b) {
+          final double da = a.x * a.x + a.y * a.y + a.z * a.z;
+          final double db = b.x * b.x + b.y * b.y + b.z * b.z;
+          return db.compareTo(da);
+        });
+      for (final TargetCube t in ordered) {
+        _paintCube(canvas, size, t);
+      }
     }
 
     // Crosshair per player settings.
