@@ -1152,25 +1152,28 @@ class GameEngine extends ChangeNotifier {
 }
 
 // ---------------------------------------------------------------------------
-// Low-latency SFX. A round-robin of players lets rapid hits overlap instead
-// of cutting each other off. All calls are fire-and-forget and swallow errors
-// so audio can never disrupt gameplay. Hit = glass, miss = deeppop.
+// Low-latency SFX. The fix for full-auto frame drops: each clip is decoded
+// ONCE up front (setSource), and a shot just rewinds + replays a preloaded
+// player — no per-shot asset resolution or decode. A small round-robin lets
+// rapid hits overlap. Fire-and-forget; errors swallowed. Hit=glass, miss=deeppop.
 // ---------------------------------------------------------------------------
 class SoundFx {
   static const String hitAsset = 'sounds/glass.ogg';
   static const String missAsset = 'sounds/deeppop.ogg';
 
-  final List<AudioPlayer> _players = [];
-  int _i = 0;
+  final List<AudioPlayer> _hit = [];
+  final List<AudioPlayer> _miss = [];
+  int _hi = 0;
+  int _mi = 0;
   bool ready = false;
 
   Future<void> init() async {
     try {
-      for (int i = 0; i < 6; i++) {
-        final AudioPlayer p = AudioPlayer();
-        await p.setReleaseMode(ReleaseMode.stop);
-        await p.setPlayerMode(PlayerMode.lowLatency);
-        _players.add(p);
+      for (int i = 0; i < 4; i++) {
+        _hit.add(await _make(hitAsset));
+      }
+      for (int i = 0; i < 3; i++) {
+        _miss.add(await _make(missAsset));
       }
       ready = true;
     } catch (_) {
@@ -1178,21 +1181,36 @@ class SoundFx {
     }
   }
 
-  void _play(String asset) {
-    if (!ready || _players.isEmpty) return;
-    final AudioPlayer p = _players[_i];
-    _i = (_i + 1) % _players.length;
-    p.play(AssetSource(asset)).catchError((_) {});
+  Future<AudioPlayer> _make(String asset) async {
+    final AudioPlayer p = AudioPlayer();
+    await p.setReleaseMode(ReleaseMode.stop);
+    await p.setPlayerMode(PlayerMode.lowLatency);
+    await p.setSource(AssetSource(asset)); // decode/prepare once
+    return p;
   }
 
-  void hit() => _play(hitAsset);
-  void miss() => _play(missAsset);
+  void _trigger(AudioPlayer p) {
+    p.seek(Duration.zero).then((_) => p.resume()).catchError((_) {});
+  }
+
+  void hit() {
+    if (!ready || _hit.isEmpty) return;
+    _trigger(_hit[_hi]);
+    _hi = (_hi + 1) % _hit.length;
+  }
+
+  void miss() {
+    if (!ready || _miss.isEmpty) return;
+    _trigger(_miss[_mi]);
+    _mi = (_mi + 1) % _miss.length;
+  }
 
   void dispose() {
-    for (final AudioPlayer p in _players) {
+    for (final AudioPlayer p in [..._hit, ..._miss]) {
       p.dispose();
     }
-    _players.clear();
+    _hit.clear();
+    _miss.clear();
   }
 }
 
