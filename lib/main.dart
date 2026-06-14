@@ -136,25 +136,25 @@ class TuneParam {
 
 const List<TuneParam> kTuneParams = [
   // FLOAT 360
-  TuneParam(1, 'fl_orbit', 'ORBIT SPEED', 0.5, 4.0, 1.9),
-  TuneParam(1, 'fl_vert', 'VERTICAL SPEED', 0.0, 1.5, 0.55),
-  TuneParam(1, 'fl_depth', 'DEPTH SPEED', 0.0, 4.0, 1.6),
-  TuneParam(1, 'fl_chmin', 'CHANGE MIN (S)', 0.1, 2.0, 0.3),
-  TuneParam(1, 'fl_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.6),
-  TuneParam(1, 'fl_accel', 'ACCELERATION', 0.5, 10.0, 2.5),
-  TuneParam(1, 'fl_size', 'TARGET SIZE', 0.1, 0.7, 0.27),
-  TuneParam(1, 'fl_distmin', 'MIN DISTANCE', 2.0, 8.0, 3.5),
-  TuneParam(1, 'fl_distmax', 'MAX DISTANCE', 2.0, 8.0, 6.2),
+  TuneParam(1, 'fl_orbit', 'ORBIT SPEED', 0.5, 4.0, 1.6),
+  TuneParam(1, 'fl_vert', 'VERTICAL SPEED', 0.0, 1.5, 0.65),
+  TuneParam(1, 'fl_depth', 'DEPTH SPEED', 0.0, 4.0, 2.6),
+  TuneParam(1, 'fl_chmin', 'CHANGE MIN (S)', 0.1, 2.0, 0.15),
+  TuneParam(1, 'fl_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.65),
+  TuneParam(1, 'fl_accel', 'ACCELERATION', 0.5, 10.0, 4.3),
+  TuneParam(1, 'fl_size', 'TARGET SIZE', 0.1, 0.7, 0.33),
+  TuneParam(1, 'fl_distmin', 'MIN DISTANCE', 2.0, 8.0, 4.7),
+  TuneParam(1, 'fl_distmax', 'MAX DISTANCE', 2.0, 8.0, 7.1),
   // REACTIVE
-  TuneParam(2, 're_strafe', 'STRAFE SPEED', 1.0, 12.0, 5.6),
-  TuneParam(2, 're_depth', 'DEPTH SPEED', 0.0, 8.0, 3.6),
-  TuneParam(2, 're_chmin', 'CHANGE MIN (S)', 0.05, 1.5, 0.11),
-  TuneParam(2, 're_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.52),
-  TuneParam(2, 're_accel', 'ACCELERATION', 1.0, 15.0, 7.2),
-  TuneParam(2, 're_size', 'TARGET RADIUS', 0.1, 0.6, 0.24),
-  TuneParam(2, 're_height', 'TARGET HEIGHT', 0.4, 2.5, 1.2),
+  TuneParam(2, 're_strafe', 'STRAFE SPEED', 1.0, 12.0, 8.6),
+  TuneParam(2, 're_depth', 'DEPTH SPEED', 0.0, 8.0, 6.4),
+  TuneParam(2, 're_chmin', 'CHANGE MIN (S)', 0.05, 1.5, 0.15),
+  TuneParam(2, 're_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.35),
+  TuneParam(2, 're_accel', 'ACCELERATION', 1.0, 15.0, 6.9),
+  TuneParam(2, 're_size', 'TARGET RADIUS', 0.1, 0.6, 0.4),
+  TuneParam(2, 're_height', 'TARGET HEIGHT', 0.4, 2.5, 1.26),
   TuneParam(2, 're_room', 'ROOM SIZE', 6.0, 24.0, 14.0),
-  TuneParam(2, 're_distmin', 'MIN DISTANCE', 2.0, 14.0, 5.0),
+  TuneParam(2, 're_distmin', 'MIN DISTANCE', 2.0, 14.0, 4.0),
   TuneParam(2, 're_distmax', 'MAX DISTANCE', 2.0, 18.0, 9.0),
 ];
 
@@ -779,6 +779,8 @@ class GameEngine extends ChangeNotifier {
   List<List<(double, double, double)>> reactiveWalls = const [];
   List<(double, double, double, double, double, double)> reactiveRoom =
       const [];
+  List<(double, double, double, double, double, double)> reactiveFloor =
+      const [];
 
   /// Copy tuning from settings and (re)build geometry. Call at round start.
   void applyTuning(Map<String, double> t) {
@@ -786,6 +788,7 @@ class GameEngine extends ChangeNotifier {
     final double w = tv('re_room');
     reactiveWalls = buildWalls(w, -w, w);
     reactiveRoom = buildRoom(w, -w, w);
+    reactiveFloor = buildFloorGrid(w, -w, w, 2);
     sDist = (tv('fl_distmin') + tv('fl_distmax')) / 2;
     rDist = (tv('re_distmin') + tv('re_distmax')) / 2;
   }
@@ -1334,6 +1337,21 @@ List<(double, double, double, double, double, double)> buildRoom(
   return lines;
 }
 
+/// Floor-plane grid lines (constant y = floor) across [-w..w] x [zf..zb],
+/// at the given spacing. Used as a horizontal reference in REACTIVE.
+List<(double, double, double, double, double, double)> buildFloorGrid(
+    double w, double zf, double zb, double spacing) {
+  const double f = kRoomFloor;
+  final lines = <(double, double, double, double, double, double)>[];
+  for (double x = -w; x <= w + 1e-6; x += spacing) {
+    lines.add((x, f, zf, x, f, zb));
+  }
+  for (double z = zf; z <= zb + 1e-6; z += spacing) {
+    lines.add((-w, f, z, w, f, z));
+  }
+  return lines;
+}
+
 final List<List<(double, double, double)>> _wallsCubes =
     buildWalls(kRoomHalfW, kRoomFront, kRoomBack);
 final List<List<(double, double, double)>> _wallsFloat =
@@ -1356,6 +1374,10 @@ class _GamePainter extends CustomPainter {
       ..color = settings.arenaAccent.withValues(alpha: 0.35)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
+    _gridPaint
+      ..color = settings.arenaAccent.withValues(alpha: 0.14)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
     _cubeEdge.color = settings.arenaBg;
     // Distance-fog endpoints and per-face cube shades, derived from the
     // player's arena/target colors.
@@ -1381,6 +1403,7 @@ class _GamePainter extends CustomPainter {
   final Paint _bgPaint = Paint();
   final Paint _accentFill = Paint();
   final Paint _edgePaint = Paint();
+  final Paint _gridPaint = Paint();
   final Paint _cubeFill = Paint();
   final Paint _cubeEdge = Paint()
     ..style = PaintingStyle.stroke
@@ -1595,7 +1618,15 @@ class _GamePainter extends CustomPainter {
     canvas.drawRect(Offset.zero & size, _bgPaint);
     _paintWalls(canvas, size);
 
-    // The room: just its edge lines, no surface tiling.
+    // REACTIVE: a dim floor grid for horizontal reference while strafing.
+    if (game.scenario == 2) {
+      for (final (double ax, double ay, double az, double bx, double by,
+          double bz) in game.reactiveFloor) {
+        _worldLine(canvas, size, ax, ay, az, bx, by, bz, _gridPaint);
+      }
+    }
+
+    // The room edge lines.
     for (final (double ax, double ay, double az, double bx, double by,
         double bz) in (switch (game.scenario) {
       0 => _roomCubes,
