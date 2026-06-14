@@ -1,7 +1,10 @@
+import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:audioplayers/audioplayers.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -389,6 +392,35 @@ const List<Rank> kRanks = [
       'The summit. A handful of humans on Earth. Prove it.'),
 ];
 
+// ---------------------------------------------------------------------------
+// Tamper-evident best-score storage. Each best is written with an HMAC so a
+// hand-edited prefs file (e.g. on a rooted device) fails verification and is
+// rejected. This stops casual save-editing; it is not proof against someone
+// who reverse-engineers the app to extract the key (see notes in chat).
+// ---------------------------------------------------------------------------
+const String _kScoreSecret =
+    'aimranked.v1.7c1f9a2e-score-integrity-do-not-change';
+
+String _scoreSig(String scenario, int value) =>
+    Hmac(sha256, utf8.encode(_kScoreSecret))
+        .convert(utf8.encode('$scenario:$value'))
+        .toString();
+
+int loadSignedBest(SharedPreferences prefs, String scenario) {
+  final int? v = prefs.getInt('best_$scenario');
+  if (v == null) return 0;
+  final String? sig = prefs.getString('best_${scenario}_sig');
+  // Missing or mismatched signature => unsigned/tampered => don't trust it.
+  if (sig == null || sig != _scoreSig(scenario, v)) return 0;
+  return v;
+}
+
+Future<void> saveSignedBest(
+    SharedPreferences prefs, String scenario, int value) async {
+  await prefs.setInt('best_$scenario', value);
+  await prefs.setString('best_${scenario}_sig', _scoreSig(scenario, value));
+}
+
 /// Highest rank whose threshold the score meets, or null when unranked.
 Rank? rankFor(int score) {
   Rank? earned;
@@ -630,7 +662,7 @@ class _HomeFlowState extends State<HomeFlow> {
       if (!mounted) return;
       setState(() {
         for (int i = 0; i < kScenarios.length; i++) {
-          _bests[i] = prefs.getInt('best_${kScenarios[i]}') ?? 0;
+          _bests[i] = loadSignedBest(prefs, kScenarios[i]);
         }
       });
     });
@@ -647,8 +679,8 @@ class _HomeFlowState extends State<HomeFlow> {
   void _onRoundFinished(RoundStats stats) {
     if (stats.score > _best) {
       _bests[_scenario] = stats.score;
-      SharedPreferences.getInstance().then((prefs) =>
-          prefs.setInt('best_${kScenarios[_scenario]}', stats.score));
+      SharedPreferences.getInstance().then(
+          (prefs) => saveSignedBest(prefs, kScenarios[_scenario], stats.score));
     }
     setState(() {
       _last = stats;
@@ -755,6 +787,8 @@ class GameEngine extends ChangeNotifier {
   GameEngine({required this.onFinished});
 
   final void Function(RoundStats) onFinished;
+  void Function()? onHit; // fired on a landed shot (for SFX)
+  void Function()? onMiss; // fired on a missed shot (for SFX)
   final math.Random _rng = math.Random();
   final List<TargetCube> targets = <TargetCube>[];
 
@@ -883,9 +917,12 @@ class GameEngine extends ChangeNotifier {
     if (hitT > 0) hitT -= dt;
     if (!started) {
       // Pre-round: targets are already placed and visible, just frozen.
+      // Spawn them already grown (born in the past) so they stay full-size
+      // through the first shot instead of collapsing to a zero-size pop-in.
       if (scenario == 0 && arena != Size.zero) {
         while (targets.length < kMaxTargets) {
-          targets.add(_spawn());
+          final TargetCube c = _spawn();
+          targets.add(TargetCube(c.x, c.y, c.z, -kGrowTime));
         }
       }
       notifyListeners();
@@ -1029,6 +1066,19 @@ class GameEngine extends ChangeNotifier {
   }
 
   /// Ray-AABB slab test from the crosshair; nearest hit wins.
+  void _registerHit(double bornClock) {
+    stats.hits++;
+    stats.sumKillMs += (clock - bornClock) * 1000;
+    hitT = 0.18;
+    HapticFeedback.lightImpact();
+    onHit?.call();
+  }
+
+  void _registerMiss() {
+    stats.misses++;
+    onMiss?.call();
+  }
+
   void shoot() {
     if (!running || paused) return;
     // The first trigger pull starts the clock AND counts as a real shot.
@@ -1040,13 +1090,10 @@ class GameEngine extends ChangeNotifier {
       final bool hit =
           _hitPill(cp2 * math.sin(yaw), math.sin(pitch), cp2 * math.cos(yaw));
       if (hit) {
-        stats.hits++;
-        stats.sumKillMs += (clock - _lastHitClock) * 1000;
+        _registerHit(_lastHitClock);
         _lastHitClock = clock;
-        hitT = 0.18;
-        HapticFeedback.lightImpact();
       } else {
-        stats.misses++;
+        _registerMiss();
       }
       notifyListeners();
       return;
@@ -1056,13 +1103,10 @@ class GameEngine extends ChangeNotifier {
       final (double cx, double cyy, double cz) =
           toCamera(sphereX, sphereY, sphereZ);
       if (cz > kNearPlane && math.sqrt(cx * cx + cyy * cyy) <= sphereR) {
-        stats.hits++;
-        stats.sumKillMs += (clock - _lastHitClock) * 1000;
+        _registerHit(_lastHitClock);
         _lastHitClock = clock;
-        hitT = 0.18;
-        HapticFeedback.lightImpact();
       } else {
-        stats.misses++;
+        _registerMiss();
       }
       notifyListeners();
       return;
@@ -1098,15 +1142,57 @@ class GameEngine extends ChangeNotifier {
     }
     if (best >= 0) {
       final TargetCube t = targets.removeAt(best);
-      stats.hits++;
-      stats.sumKillMs += (clock - t.born) * 1000;
-      hitT = 0.18;
-      HapticFeedback.lightImpact();
+      _registerHit(t.born);
       targets.add(_spawn());
     } else {
-      stats.misses++;
+      _registerMiss();
     }
     notifyListeners();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Low-latency SFX. A round-robin of players lets rapid hits overlap instead
+// of cutting each other off. All calls are fire-and-forget and swallow errors
+// so audio can never disrupt gameplay. Hit = glass, miss = deeppop.
+// ---------------------------------------------------------------------------
+class SoundFx {
+  static const String hitAsset = 'sounds/glass.ogg';
+  static const String missAsset = 'sounds/deeppop.ogg';
+
+  final List<AudioPlayer> _players = [];
+  int _i = 0;
+  bool ready = false;
+
+  Future<void> init() async {
+    try {
+      for (int i = 0; i < 6; i++) {
+        final AudioPlayer p = AudioPlayer();
+        await p.setReleaseMode(ReleaseMode.stop);
+        await p.setPlayerMode(PlayerMode.lowLatency);
+        _players.add(p);
+      }
+      ready = true;
+    } catch (_) {
+      ready = false; // no audio backend (e.g. tests) — game stays silent
+    }
+  }
+
+  void _play(String asset) {
+    if (!ready || _players.isEmpty) return;
+    final AudioPlayer p = _players[_i];
+    _i = (_i + 1) % _players.length;
+    p.play(AssetSource(asset)).catchError((_) {});
+  }
+
+  void hit() => _play(hitAsset);
+  void miss() => _play(missAsset);
+
+  void dispose() {
+    for (final AudioPlayer p in _players) {
+      p.dispose();
+    }
+    _players.clear();
   }
 }
 
@@ -1135,9 +1221,10 @@ class GameScreen extends StatefulWidget {
 }
 
 class _GameScreenState extends State<GameScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final GameEngine _game;
   late final Ticker _ticker;
+  final SoundFx _sfx = SoundFx();
   Duration _prev = Duration.zero;
 
   int? _lookPointer;
@@ -1147,6 +1234,8 @@ class _GameScreenState extends State<GameScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _sfx.init();
     _game = GameEngine(onFinished: widget.onFinished)
       ..scenario = widget.scenario
       ..sensitivity = widget.settings.sensitivity
@@ -1154,10 +1243,24 @@ class _GameScreenState extends State<GameScreen>
       ..fireXNorm = widget.settings.fireX
       ..fireYNorm = widget.settings.fireY
       ..fireScale = widget.settings.fireScale
-      ..fireOpacity = widget.settings.fireOpacity;
+      ..fireOpacity = widget.settings.fireOpacity
+      ..onHit = _sfx.hit
+      ..onMiss = _sfx.miss;
     _game.stats.scoreScale = kScoreScale[widget.scenario];
     _game.applyTuning(widget.settings.tune);
     _ticker = createTicker(_tick)..start();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Auto-pause when the app loses focus (notification, call, app switch)
+    // so a round isn't ruined in the background.
+    if (state != AppLifecycleState.resumed &&
+        _game.running &&
+        _game.started &&
+        !_game.paused) {
+      _setPaused(true);
+    }
   }
 
   void _tick(Duration elapsed) {
@@ -1173,8 +1276,10 @@ class _GameScreenState extends State<GameScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
     _game.dispose();
+    _sfx.dispose();
     super.dispose();
   }
 
@@ -1248,22 +1353,31 @@ class _GameScreenState extends State<GameScreen>
                   children: [
                     Text('PAUSED', style: _fgStyle(24, spacing: 8)),
                     const SizedBox(height: 28),
-                    OutlinedButton(
-                      style: _buttonStyle(),
-                      onPressed: () => _setPaused(false),
-                      child: const Text('RESUME'),
+                    SizedBox(
+                      width: 240,
+                      child: OutlinedButton(
+                        style: _buttonStyle(),
+                        onPressed: () => _setPaused(false),
+                        child: const Text('RESUME'),
+                      ),
                     ),
                     const SizedBox(height: 16),
-                    OutlinedButton(
-                      style: _buttonStyle(),
-                      onPressed: widget.onRestart,
-                      child: const Text('RESTART'),
+                    SizedBox(
+                      width: 240,
+                      child: OutlinedButton(
+                        style: _buttonStyle(),
+                        onPressed: widget.onRestart,
+                        child: const Text('RESTART'),
+                      ),
                     ),
                     const SizedBox(height: 16),
-                    OutlinedButton(
-                      style: _buttonStyle(),
-                      onPressed: widget.onQuit,
-                      child: const Text('MENU'),
+                    SizedBox(
+                      width: 240,
+                      child: OutlinedButton(
+                        style: _buttonStyle(),
+                        onPressed: widget.onQuit,
+                        child: const Text('MENU'),
+                      ),
                     ),
                   ],
                 ),
@@ -1389,6 +1503,29 @@ class _GamePainter extends CustomPainter {
         Color.lerp(const Color(0xFF000000), settings.targetColor, 0.55)!;
     _shadeSide =
         Color.lerp(const Color(0xFF000000), settings.targetColor, 0.68)!;
+    _sphereFill.color = settings.targetColor;
+    _pillCore
+      ..color = settings.targetColor
+      ..strokeCap = StrokeCap.round;
+    _pillOutline
+      ..color = settings.arenaBg
+      ..strokeCap = StrokeCap.round;
+    _pauseBar.color = settings.arenaAccent;
+    // Precompute the active room's wall geometry and per-corner fog colors.
+    // Fog depends only on distance to the eye, and the camera only rotates
+    // (which preserves distance) — so corner colors are constant per round.
+    _walls = switch (game.scenario) {
+      0 => _wallsCubes,
+      2 => game.reactiveWalls,
+      _ => _wallsFloat,
+    };
+    _wallCornerColors = [
+      for (final List<(double, double, double)> wall in _walls)
+        [
+          for (final (double x, double y, double z) in wall)
+            _fogColorFor(math.sqrt(x * x + y * y + z * z))
+        ]
+    ];
   }
 
   late final Color _fogNear;
@@ -1396,6 +1533,8 @@ class _GamePainter extends CustomPainter {
   late final Color _shadeTop;
   late final Color _shadeBottom;
   late final Color _shadeSide;
+  late final List<List<(double, double, double)>> _walls;
+  late final List<List<Color>> _wallCornerColors;
 
   final GameEngine game;
   final AppSettings settings;
@@ -1405,10 +1544,26 @@ class _GamePainter extends CustomPainter {
   final Paint _edgePaint = Paint();
   final Paint _gridPaint = Paint();
   final Paint _cubeFill = Paint();
+  final Paint _sphereFill = Paint();
+  final Paint _pillCore = Paint();
+  final Paint _pillOutline = Paint();
+  final Paint _pauseBar = Paint();
   final Paint _cubeEdge = Paint()
     ..style = PaintingStyle.stroke
     ..strokeWidth = 2
     ..strokeJoin = StrokeJoin.round;
+
+  // Reused per-frame scratch buffers for the batched wall fill (#2): cleared
+  // and refilled each frame so there's no allocation churn beyond Vertices.
+  final List<(double, double, double)> _camBuf = [];
+  final List<(double, double, double)> _clipPos = [];
+  final List<Color> _clipCol = [];
+  final List<Offset> _projBuf = [];
+  final List<Offset> _wallPts = [];
+  final List<Color> _wallCols = [];
+
+  Color _fogColorFor(double d) =>
+      Color.lerp(_fogNear, _fogFar, ((d - 2) / 14).clamp(0, 1))!;
 
   late final _CachedText _scoreText =
       _CachedText(20, color: settings.arenaAccent);
@@ -1419,48 +1574,62 @@ class _GamePainter extends CustomPainter {
   late final _CachedText _fpsText =
       _CachedText(13, weight: FontWeight.w400, color: settings.arenaAccent);
 
-  /// Fog-shaded room surfaces: clip each quad against the near plane, then
-  /// fill with per-vertex colors (GPU-interpolated; no shader allocation).
+  /// Fog-shaded room surfaces. Near-plane clipped, then all walls batched into
+  /// a single triangle-list draw call. Corner fog colors are precomputed (they
+  /// don't change as the camera rotates); only clip-generated vertices, which
+  /// appear when a wall straddles the near plane, are colored per frame — using
+  /// the exact same formula, so the result is pixel-identical to per-wall fans.
   void _paintWalls(Canvas canvas, Size size) {
     final double cx = size.width / 2, cy = size.height / 2, fo = game.focal;
-    final List<List<(double, double, double)>> walls = switch (game.scenario) {
-      0 => _wallsCubes,
-      2 => game.reactiveWalls,
-      _ => _wallsFloat,
-    };
-    for (final List<(double, double, double)> wall in walls) {
-      final List<(double, double, double)> cam = [
-        for (final (double x, double y, double z) in wall)
-          game.toCamera(x, y, z)
-      ];
-      // Sutherland-Hodgman clip against z = kNearPlane.
-      final List<(double, double, double)> poly = [];
-      for (int i = 0; i < cam.length; i++) {
-        final (double, double, double) a = cam[i];
-        final (double, double, double) b = cam[(i + 1) % cam.length];
+    _wallPts.clear();
+    _wallCols.clear();
+    for (int wi = 0; wi < _walls.length; wi++) {
+      final List<(double, double, double)> wall = _walls[wi];
+      final List<Color> cornerCols = _wallCornerColors[wi];
+      final int n = wall.length;
+      _camBuf.clear();
+      for (final (double x, double y, double z) in wall) {
+        _camBuf.add(game.toCamera(x, y, z));
+      }
+      // Sutherland-Hodgman clip against z = kNearPlane, carrying colors.
+      _clipPos.clear();
+      _clipCol.clear();
+      for (int i = 0; i < n; i++) {
+        final (double, double, double) a = _camBuf[i];
+        final (double, double, double) b = _camBuf[(i + 1) % n];
         final bool aIn = a.$3 > kNearPlane, bIn = b.$3 > kNearPlane;
-        if (aIn) poly.add(a);
+        if (aIn) {
+          _clipPos.add(a);
+          _clipCol.add(cornerCols[i]);
+        }
         if (aIn != bIn) {
           final double t = (kNearPlane - a.$3) / (b.$3 - a.$3);
-          poly.add((
-            a.$1 + (b.$1 - a.$1) * t,
-            a.$2 + (b.$2 - a.$2) * t,
-            kNearPlane,
-          ));
+          final double px = a.$1 + (b.$1 - a.$1) * t;
+          final double py = a.$2 + (b.$2 - a.$2) * t;
+          _clipPos.add((px, py, kNearPlane));
+          _clipCol.add(_fogColorFor(
+              math.sqrt(px * px + py * py + kNearPlane * kNearPlane)));
         }
       }
-      if (poly.length < 3) continue;
-      final List<Offset> pts = [];
-      final List<Color> cols = [];
-      for (final (double x, double y, double z) in poly) {
-        pts.add(Offset(cx + fo * x / z, cy - fo * y / z));
-        // Rotation preserves distance, so camera-space length is world
-        // distance from the eye — rotation-stable fog.
-        final double d = math.sqrt(x * x + y * y + z * z);
-        cols.add(Color.lerp(_fogNear, _fogFar, ((d - 2) / 14).clamp(0, 1))!);
+      final int m = _clipPos.length;
+      if (m < 3) continue;
+      _projBuf.clear();
+      for (final (double x, double y, double z) in _clipPos) {
+        _projBuf.add(Offset(cx + fo * x / z, cy - fo * y / z));
       }
+      // Fan -> triangles, appended to the shared batch (preserves draw order).
+      for (int i = 1; i < m - 1; i++) {
+        _wallPts.add(_projBuf[0]);
+        _wallCols.add(_clipCol[0]);
+        _wallPts.add(_projBuf[i]);
+        _wallCols.add(_clipCol[i]);
+        _wallPts.add(_projBuf[i + 1]);
+        _wallCols.add(_clipCol[i + 1]);
+      }
+    }
+    if (_wallPts.length >= 3) {
       canvas.drawVertices(
-        ui.Vertices(ui.VertexMode.triangleFan, pts, colors: cols),
+        ui.Vertices(ui.VertexMode.triangles, _wallPts, colors: _wallCols),
         BlendMode.dst,
         _wallPaint,
       );
@@ -1578,7 +1747,7 @@ class _GamePainter extends CustomPainter {
     final double cx = size.width / 2, cy = size.height / 2;
     final double r = game.focal * game.sphereR / pz;
     final Offset c = Offset(cx + game.focal * px / pz, cy - game.focal * py / pz);
-    canvas.drawCircle(c, r, Paint()..color = settings.targetColor);
+    canvas.drawCircle(c, r, _sphereFill);
     canvas.drawCircle(c, r, _cubeEdge);
   }
 
@@ -1594,22 +1763,8 @@ class _GamePainter extends CustomPainter {
     final Offset top = Offset(cx + fo * x1 / z1, cy - fo * y1 / z1);
     final Offset bottom = Offset(cx + fo * x2 / z2, cy - fo * y2 / z2);
     final double r = fo * game.pillR * 2 / (z1 + z2);
-    canvas.drawLine(
-      top,
-      bottom,
-      Paint()
-        ..color = settings.arenaBg
-        ..strokeWidth = 2 * r + 4
-        ..strokeCap = StrokeCap.round,
-    );
-    canvas.drawLine(
-      top,
-      bottom,
-      Paint()
-        ..color = settings.targetColor
-        ..strokeWidth = 2 * r
-        ..strokeCap = StrokeCap.round,
-    );
+    canvas.drawLine(top, bottom, _pillOutline..strokeWidth = 2 * r + 4);
+    canvas.drawLine(top, bottom, _pillCore..strokeWidth = 2 * r);
   }
 
   @override
@@ -1700,17 +1855,16 @@ class _GamePainter extends CustomPainter {
 
   void _paintPauseButton(Canvas canvas) {
     final Rect r = game.pauseRect;
-    final Paint bar = Paint()..color = settings.arenaAccent;
     const double barW = 6, barH = 22;
     final Offset c = r.center;
     canvas.drawRect(
         Rect.fromCenter(
             center: c - const Offset(6.5, 0), width: barW, height: barH),
-        bar);
+        _pauseBar);
     canvas.drawRect(
         Rect.fromCenter(
             center: c + const Offset(6.5, 0), width: barW, height: barH),
-        bar);
+        _pauseBar);
   }
 
   void _paintFireButton(Canvas canvas) {
@@ -1818,7 +1972,9 @@ class _MenuScreen extends StatelessWidget {
                 children: [
                   _navButton('PROFILE', onProfile),
                   _navButton('RANKS', onRanks),
-                  _navButton('TUNING', onTuning),
+                  // TUNING hidden for now — re-add this nav button to expose
+                  // the bot-tuning screen again (screen + wiring kept intact).
+                  // _navButton('TUNING', onTuning),
                   _navButton('SETTINGS', onSettings),
                 ],
               ),

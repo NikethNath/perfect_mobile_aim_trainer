@@ -1,5 +1,5 @@
 name: aim_trainer
-description: "Minimal duotone aim trainer for Android and iOS."
+description: "Aim Ranked — minimal high-performance aim trainer."
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -12,11 +12,31 @@ dependencies:
     sdk: flutter
   shared_preferences: ^2.3.0
   flutter_displaymode: ^0.6.0
+  crypto: ^3.0.0
+  audioplayers: ^6.1.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.1
+  flutter_native_splash: ^2.4.1
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/sounds/
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/branding/icon.png"
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "assets/branding/icon_fg.png"
+
+flutter_native_splash:
+  color: "#000000"
+  image: "assets/branding/splash.png"
+  android_12:
+    color: "#000000"
+    image: "assets/branding/splash.png"
