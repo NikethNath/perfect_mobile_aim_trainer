@@ -1168,25 +1168,35 @@ class SoundFx {
   bool ready = false;
 
   Future<void> init() async {
-    try {
-      for (int i = 0; i < 4; i++) {
-        _hit.add(await _make(hitAsset));
-      }
-      for (int i = 0; i < 3; i++) {
-        _miss.add(await _make(missAsset));
-      }
-      ready = true;
-    } catch (_) {
-      ready = false; // no audio backend (e.g. tests) — game stays silent
+    // Build each player independently so one failure can't silence the whole
+    // game. Any player that comes up means we're "ready".
+    for (int i = 0; i < 4; i++) {
+      final AudioPlayer? p = await _make(hitAsset);
+      if (p != null) _hit.add(p);
     }
+    for (int i = 0; i < 3; i++) {
+      final AudioPlayer? p = await _make(missAsset);
+      if (p != null) _miss.add(p);
+    }
+    ready = _hit.isNotEmpty || _miss.isNotEmpty;
   }
 
-  Future<AudioPlayer> _make(String asset) async {
-    final AudioPlayer p = AudioPlayer();
-    await p.setReleaseMode(ReleaseMode.stop);
-    await p.setPlayerMode(PlayerMode.lowLatency);
-    await p.setSource(AssetSource(asset)); // decode/prepare once
-    return p;
+  // mediaPlayer mode (not lowLatency): lowLatency routes through Android
+  // SoundPool, where seek() is unsupported and rejects — which killed our
+  // rewind-and-replay and produced total silence on real devices. mediaPlayer
+  // supports seek; the FPS cost only came from per-shot decode, which we avoid
+  // by decoding once here (setSource) and reusing the player.
+  Future<AudioPlayer?> _make(String asset) async {
+    try {
+      final AudioPlayer p = AudioPlayer();
+      await p.setReleaseMode(ReleaseMode.stop);
+      await p.setPlayerMode(PlayerMode.mediaPlayer);
+      await p.setVolume(1.0);
+      await p.setSource(AssetSource(asset)); // decode/prepare once
+      return p;
+    } catch (_) {
+      return null; // no audio backend (e.g. tests) — that player stays silent
+    }
   }
 
   void _trigger(AudioPlayer p) {
