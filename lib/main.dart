@@ -1167,15 +1167,20 @@ class SoundFx {
   int _mi = 0;
   bool ready = false;
 
+  // Hits should punch through; misses stay subtle so spammed full-auto misses
+  // don't drown out the hit feedback.
+  static const double hitVolume = 1.0;
+  static const double missVolume = 0.3;
+
   Future<void> init() async {
     // Build each player independently so one failure can't silence the whole
     // game. Any player that comes up means we're "ready".
     for (int i = 0; i < 4; i++) {
-      final AudioPlayer? p = await _make(hitAsset);
+      final AudioPlayer? p = await _make(hitAsset, hitVolume);
       if (p != null) _hit.add(p);
     }
     for (int i = 0; i < 3; i++) {
-      final AudioPlayer? p = await _make(missAsset);
+      final AudioPlayer? p = await _make(missAsset, missVolume);
       if (p != null) _miss.add(p);
     }
     ready = _hit.isNotEmpty || _miss.isNotEmpty;
@@ -1186,12 +1191,12 @@ class SoundFx {
   // rewind-and-replay and produced total silence on real devices. mediaPlayer
   // supports seek; the FPS cost only came from per-shot decode, which we avoid
   // by decoding once here (setSource) and reusing the player.
-  Future<AudioPlayer?> _make(String asset) async {
+  Future<AudioPlayer?> _make(String asset, double volume) async {
     try {
       final AudioPlayer p = AudioPlayer();
       await p.setReleaseMode(ReleaseMode.stop);
       await p.setPlayerMode(PlayerMode.mediaPlayer);
-      await p.setVolume(1.0);
+      await p.setVolume(volume);
       await p.setSource(AssetSource(asset)); // decode/prepare once
       return p;
     } catch (_) {
@@ -1957,7 +1962,12 @@ class _MenuScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // No horizontal inset: a cutout sits on one short edge, so insetting only
+    // that side would push the centered menu off the display's true center.
+    // The menu is centred and narrow, so it never reaches the cutout anyway.
     return SafeArea(
+      left: false,
+      right: false,
       child: Center(
         // Scale the whole menu down uniformly when the screen is too short.
         child: FittedBox(
