@@ -1,9 +1,11 @@
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // ---------------------------------------------------------------------------
@@ -30,17 +32,10 @@ const double kGrowTime = 0.1;
 
 // 3D tuning.
 const double kCubeHalf = 0.5; // target cube half-extent (world units)
-const double kSphereR = 0.27; // FLOAT 360 sphere radius (world units)
-// REACTIVE pill target dimensions (world units).
-const double kPillR = 0.24; // capsule radius
-// Sized so the capsule stands on the floor yet its top reaches the same
-// height (1.18 world units) it had when it floated.
-const double kPillHalfH = 1.2; // half-length of the capsule's core segment
-// Vertical center set so the capsule's bottom cap rests on the floor.
-const double kPillYC = kRoomFloor + kPillHalfH + kPillR;
 const double kLookSens = 0.0042; // radians per logical pixel of swipe
 const double kPitchLimit = 1.1; // radians
 const double kNearPlane = 0.2;
+// Bot target sizes/room are now tunable per scenario; see kTuneParams.
 
 // The room: a large cube the player stands inside, eye at the origin,
 // centered on the front wall. Targets spawn against the opposite wall.
@@ -54,6 +49,16 @@ const double kFloatHalfD = 7.5; // room depth +/- around the player
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Android keeps apps at 60Hz unless they explicitly request a faster
+  // display mode; ask for the highest the panel supports (90/120/144Hz).
+  // No-op on iOS, where ProMotion is unlocked via Info.plist instead.
+  if (Platform.isAndroid) {
+    try {
+      await FlutterDisplayMode.setHighRefreshRate();
+    } catch (_) {
+      // Device doesn't support mode switching; stay at default.
+    }
+  }
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
@@ -68,7 +73,7 @@ class AimTrainerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Aim Trainer',
+      title: 'Aim Ranked',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -89,6 +94,8 @@ class AimTrainerApp extends StatelessWidget {
 // ---------------------------------------------------------------------------
 enum _Screen {
   menu,
+  play,
+  tuning,
   profile,
   ranks,
   settings,
@@ -101,6 +108,59 @@ enum _Screen {
 }
 
 const List<String> kScenarios = ['CUBES', 'FLOAT 360', 'REACTIVE'];
+
+const List<String> kScenarioDesc = [
+  'Flick between static cubes on the far wall. Pure target switching, '
+      'precision and click timing.',
+  'Track a single sphere drifting around you in full 360°. Smooth tracking '
+      'and movement reading.',
+  'Track a strafing bot that jukes left/right and pushes in and out. '
+      'Reactive tracking under pressure.',
+];
+
+// ---------------------------------------------------------------------------
+// Bot tuning parameters. Each is a live, persisted slider grouped by scenario
+// (1 = FLOAT 360, 2 = REACTIVE). Dial them in the Tuning menu, then read the
+// values back here to bake in a final default.
+// ---------------------------------------------------------------------------
+class TuneParam {
+  const TuneParam(
+      this.scenario, this.key, this.label, this.min, this.max, this.def);
+  final int scenario;
+  final String key;
+  final String label;
+  final double min;
+  final double max;
+  final double def;
+}
+
+const List<TuneParam> kTuneParams = [
+  // FLOAT 360
+  TuneParam(1, 'fl_orbit', 'ORBIT SPEED', 0.5, 4.0, 1.9),
+  TuneParam(1, 'fl_vert', 'VERTICAL SPEED', 0.0, 1.5, 0.55),
+  TuneParam(1, 'fl_depth', 'DEPTH SPEED', 0.0, 4.0, 1.6),
+  TuneParam(1, 'fl_chmin', 'CHANGE MIN (S)', 0.1, 2.0, 0.3),
+  TuneParam(1, 'fl_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.6),
+  TuneParam(1, 'fl_accel', 'ACCELERATION', 0.5, 10.0, 2.5),
+  TuneParam(1, 'fl_size', 'TARGET SIZE', 0.1, 0.7, 0.27),
+  TuneParam(1, 'fl_distmin', 'MIN DISTANCE', 2.0, 8.0, 3.5),
+  TuneParam(1, 'fl_distmax', 'MAX DISTANCE', 2.0, 8.0, 6.2),
+  // REACTIVE
+  TuneParam(2, 're_strafe', 'STRAFE SPEED', 1.0, 12.0, 5.6),
+  TuneParam(2, 're_depth', 'DEPTH SPEED', 0.0, 8.0, 3.6),
+  TuneParam(2, 're_chmin', 'CHANGE MIN (S)', 0.05, 1.5, 0.11),
+  TuneParam(2, 're_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.52),
+  TuneParam(2, 're_accel', 'ACCELERATION', 1.0, 15.0, 7.2),
+  TuneParam(2, 're_size', 'TARGET RADIUS', 0.1, 0.6, 0.24),
+  TuneParam(2, 're_height', 'TARGET HEIGHT', 0.4, 2.5, 1.2),
+  TuneParam(2, 're_room', 'ROOM SIZE', 6.0, 24.0, 14.0),
+  TuneParam(2, 're_distmin', 'MIN DISTANCE', 2.0, 14.0, 5.0),
+  TuneParam(2, 're_distmax', 'MAX DISTANCE', 2.0, 18.0, 9.0),
+];
+
+final Map<String, double> kTuneDefaults = {
+  for (final TuneParam p in kTuneParams) p.key: p.def
+};
 
 const List<Color> kBorderColors = [Color(0xFF000000), ...kTargetColors];
 
@@ -115,11 +175,16 @@ const List<Color> kBgColors = [
   Color(0xFFF3EFE6), // paper (light)
 ];
 
+// Default trainer palette: black arena, red targets, white accents.
+const Color kDefaultArenaBg = Color(0xFF000000);
+const Color kDefaultTarget = Color(0xFFFF4757);
+const Color kDefaultAccent = Color(0xFFFFFFFF);
+
 class AppSettings {
-  Color targetColor = kFg;
-  Color arenaBg = kBg; // trainer background
-  Color arenaAccent = kFg; // trainer grid/HUD accent
-  Color crosshairColor = kFg;
+  Color targetColor = kDefaultTarget;
+  Color arenaBg = kDefaultArenaBg; // trainer background
+  Color arenaAccent = kDefaultAccent; // trainer grid/HUD accent
+  Color crosshairColor = kDefaultAccent;
   double crosshairScale = 1.0; // overall multiplier on the whole crosshair
   double crosshairDot = 2.2; // center dot radius (px); 0 removes it
   double crosshairLength = 10; // length of the 4 lines (px); 0 removes them
@@ -137,12 +202,20 @@ class AppSettings {
 
   bool showFps = false;
 
+  // Live bot-tuning values, keyed by TuneParam.key.
+  final Map<String, double> tune = Map<String, double>.from(kTuneDefaults);
+
+  double tv(String key) => tune[key] ?? kTuneDefaults[key]!;
+
   Future<void> load() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    targetColor = Color(prefs.getInt('target_color') ?? kFg.toARGB32());
-    arenaBg = Color(prefs.getInt('arena_bg') ?? kBg.toARGB32());
-    arenaAccent = Color(prefs.getInt('arena_accent') ?? kFg.toARGB32());
-    crosshairColor = Color(prefs.getInt('crosshair_color') ?? kFg.toARGB32());
+    targetColor =
+        Color(prefs.getInt('target_color') ?? kDefaultTarget.toARGB32());
+    arenaBg = Color(prefs.getInt('arena_bg') ?? kDefaultArenaBg.toARGB32());
+    arenaAccent =
+        Color(prefs.getInt('arena_accent') ?? kDefaultAccent.toARGB32());
+    crosshairColor =
+        Color(prefs.getInt('crosshair_color') ?? kDefaultAccent.toARGB32());
     crosshairScale = prefs.getDouble('crosshair_scale') ?? 1.0;
     crosshairDot = prefs.getDouble('crosshair_dot') ?? 2.2;
     crosshairLength = prefs.getDouble('crosshair_length') ?? 10;
@@ -157,6 +230,9 @@ class AppSettings {
     fireScale = prefs.getDouble('fire_scale') ?? 1.0;
     fireOpacity = prefs.getDouble('fire_opacity') ?? 1.0;
     showFps = prefs.getBool('show_fps') ?? false;
+    for (final TuneParam p in kTuneParams) {
+      tune[p.key] = prefs.getDouble('tune_${p.key}') ?? p.def;
+    }
   }
 
   Future<void> save() async {
@@ -179,6 +255,9 @@ class AppSettings {
     await prefs.setDouble('fire_scale', fireScale);
     await prefs.setDouble('fire_opacity', fireOpacity);
     await prefs.setBool('show_fps', showFps);
+    for (final TuneParam p in kTuneParams) {
+      await prefs.setDouble('tune_${p.key}', tv(p.key));
+    }
   }
 }
 
@@ -254,16 +333,23 @@ void drawFireButton(Canvas canvas, Offset c, double r, double op) {
   );
 }
 
+// Per-scenario score multiplier, indexed by scenario. Tracking modes
+// (full-auto) are scaled so a Celestial-tier run (~60% uptime, full round)
+// lands on the same ~400 as a Celestial CUBES run. See kRanks.
+const List<double> kScoreScale = [1.0, 1.43, 1.43];
+
 class RoundStats {
   int hits = 0;
   int misses = 0;
   double sumKillMs = 0;
+  double scoreScale = 1.0; // set from kScoreScale at round start
 
   double get accuracy => hits + misses == 0 ? 0 : hits / (hits + misses);
   double get avgKillMs => hits == 0 ? 0 : sumKillMs / hits;
 
-  /// Score formula: hits weighted by the square root of accuracy.
-  int get score => (hits * math.sqrt(accuracy)).round();
+  /// Score formula: hits weighted by the square root of accuracy, then
+  /// normalized per scenario so all modes share one rank ladder.
+  int get score => (hits * math.sqrt(accuracy) * scoreScale).round();
 }
 
 // ---------------------------------------------------------------------------
@@ -575,13 +661,26 @@ class _HomeFlowState extends State<HomeFlow> {
     return Scaffold(
       body: switch (_screen) {
         _Screen.menu => _MenuScreen(
-            best: _best,
-            scenario: _scenario,
-            onScenario: (i) => setState(() => _scenario = i),
-            onStart: () => setState(() => _screen = _Screen.playing),
+            topRank: rankFor(_bests.values.fold(0, (a, b) => math.max(a, b))),
+            onPlay: () => setState(() => _screen = _Screen.play),
+            onTuning: () => setState(() => _screen = _Screen.tuning),
             onProfile: () => setState(() => _screen = _Screen.profile),
             onRanks: () => setState(() => _screen = _Screen.ranks),
             onSettings: () => setState(() => _screen = _Screen.settings),
+          ),
+        _Screen.play => _PlayScreen(
+            bests: _bests,
+            onPick: (i) => setState(() {
+              _scenario = i;
+              _round++;
+              _screen = _Screen.playing;
+            }),
+            onBack: () => setState(() => _screen = _Screen.menu),
+          ),
+        _Screen.tuning => _TuningScreen(
+            settings: _settings,
+            onChanged: _saveSettings,
+            onBack: () => setState(() => _screen = _Screen.menu),
           ),
         _Screen.profile => _ProfileScreen(
             bests: _bests,
@@ -668,6 +767,29 @@ class GameEngine extends ChangeNotifier {
   Size arena = Size.zero;
   int scenario = 0; // index into kScenarios
 
+  // Bot tuning values, shared from AppSettings at round start.
+  Map<String, double> tune = kTuneDefaults;
+  double tv(String k) => tune[k] ?? kTuneDefaults[k]!;
+  double get sphereR => tv('fl_size');
+  double get pillR => tv('re_size');
+  double get pillHalfH => tv('re_height');
+  double get pillYC => kRoomFloor + pillHalfH + pillR;
+
+  // REACTIVE arena geometry, rebuilt from the tunable room size at setup.
+  List<List<(double, double, double)>> reactiveWalls = const [];
+  List<(double, double, double, double, double, double)> reactiveRoom =
+      const [];
+
+  /// Copy tuning from settings and (re)build geometry. Call at round start.
+  void applyTuning(Map<String, double> t) {
+    tune = t;
+    final double w = tv('re_room');
+    reactiveWalls = buildWalls(w, -w, w);
+    reactiveRoom = buildRoom(w, -w, w);
+    sDist = (tv('fl_distmin') + tv('fl_distmax')) / 2;
+    rDist = (tv('re_distmin') + tv('re_distmax')) / 2;
+  }
+
   // FLOAT 360 state: one sphere wandering around the player in spherical
   // coordinates. Velocities ease toward freshly randomized targets, so the
   // motion accelerates and decelerates gradually — built for tracking.
@@ -683,7 +805,7 @@ class GameEngine extends ChangeNotifier {
 
   // REACTIVE state: a pill that orbit-strafes around the centered player and
   // pushes in/out. Erratic leg lengths, snappy accel/decel.
-  double rAz = 0, rDist = 3.5; // position (azimuth, distance)
+  double rAz = 0, rDist = 7; // position (azimuth, distance)
   double rvS = 0, rvD = 0; // strafe (linear u/s) and depth velocities
   double rtS = 0, rtD = 0; // velocities the easing chases
   double _rRetargetT = 0;
@@ -793,14 +915,14 @@ class GameEngine extends ChangeNotifier {
   void _updateFloat(double dt) {
     _retargetT -= dt;
     if (_retargetT <= 0) {
-      _retargetT = 0.3 + _rng.nextDouble() * 0.6;
-      tAz = (_rng.nextDouble() * 2 - 1) * 1.9; // rad/s around the player
-      tEl = (_rng.nextDouble() * 2 - 1) * 0.55;
-      tDist = (_rng.nextDouble() * 2 - 1) * 1.6;
+      _retargetT = tv('fl_chmin') + _rng.nextDouble() * tv('fl_chrange');
+      tAz = (_rng.nextDouble() * 2 - 1) * tv('fl_orbit'); // rad/s
+      tEl = (_rng.nextDouble() * 2 - 1) * tv('fl_vert');
+      tDist = (_rng.nextDouble() * 2 - 1) * tv('fl_depth');
     }
-    // Ease current velocity toward the target velocity. Punchy (~0.4s time
-    // constant): the sphere lunges into new headings and brakes hard.
-    final double k = math.min(1, dt * 2.5);
+    // Ease current velocity toward the target velocity. Punchier acceleration
+    // makes the sphere lunge into headings and brake harder.
+    final double k = math.min(1, dt * tv('fl_accel'));
     vAz += (tAz - vAz) * k;
     vEl += (tEl - vEl) * k;
     vDist += (tDist - vDist) * k;
@@ -815,12 +937,13 @@ class GameEngine extends ChangeNotifier {
       sEl = -0.15;
       tEl = tEl.abs();
     }
-    // Keep the sphere inside the centered room (half-width 7, radius 0.55).
-    if (sDist > 6.2) {
-      sDist = 6.2;
+    final double dlo = math.min(tv('fl_distmin'), tv('fl_distmax'));
+    final double dhi = math.max(tv('fl_distmin'), tv('fl_distmax'));
+    if (sDist > dhi) {
+      sDist = dhi;
       tDist = -tDist.abs();
-    } else if (sDist < 3.5) {
-      sDist = 3.5;
+    } else if (sDist < dlo) {
+      sDist = dlo;
       tDist = tDist.abs();
     }
   }
@@ -831,9 +954,9 @@ class GameEngine extends ChangeNotifier {
       // Erratic legs: random duration means random strafe distances —
       // short jukes through committed runs. Strafe and depth are picked
       // with identical (uniform, symmetric) probability.
-      _rRetargetT = 0.11 + _rng.nextDouble() * 0.52;
-      const double topStrafe = 5.6; // linear world units/s
-      const double topDepth = 3.6;
+      _rRetargetT = tv('re_chmin') + _rng.nextDouble() * tv('re_chrange');
+      final double topStrafe = tv('re_strafe'); // linear world units/s
+      final double topDepth = tv('re_depth');
       // Strafe legs always commit to full speed — only the direction is
       // random, so the pill never dawdles at low velocity.
       rtS = (_rng.nextBool() ? 1 : -1) * topStrafe;
@@ -842,17 +965,18 @@ class GameEngine extends ChangeNotifier {
           topDepth;
     }
     // Snappy easing: hits top speed (and stops) fast.
-    final double k = math.min(1, dt * 7.2);
+    final double k = math.min(1, dt * tv('re_accel'));
     rvS += (rtS - rvS) * k;
     rvD += (rtD - rvD) * k;
     rAz += rvS / rDist * dt; // constant linear strafe speed at any distance
     rDist += rvD * dt;
-    // Close-range band, after KovaaK's "Close Fast Strafes Invincible".
-    if (rDist > 4.5) {
-      rDist = 4.5;
+    final double dlo = math.min(tv('re_distmin'), tv('re_distmax'));
+    final double dhi = math.max(tv('re_distmin'), tv('re_distmax'));
+    if (rDist > dhi) {
+      rDist = dhi;
       rtD = -rtD.abs();
-    } else if (rDist < 2.5) {
-      rDist = 2.5;
+    } else if (rDist < dlo) {
+      rDist = dlo;
       rtD = rtD.abs();
     }
   }
@@ -865,15 +989,15 @@ class GameEngine extends ChangeNotifier {
     final double t = (rpX * fx + rpZ * fz) / dd;
     if (t < 0) return false;
     final double ex = rpX - fx * t, ez = rpZ - fz * t;
-    if (ex * ex + ez * ez > kPillR * kPillR) return false;
+    if (ex * ex + ez * ez > pillR * pillR) return false;
     final double yAt = fy * t;
-    final double yLo = kPillYC - kPillHalfH, yHi = kPillYC + kPillHalfH;
+    final double yLo = pillYC - pillHalfH, yHi = pillYC + pillHalfH;
     if (yAt >= yLo && yAt <= yHi) return true;
     // Near an end: test the cap sphere.
     final double cy = yAt < yLo ? yLo : yHi;
     final double dot = rpX * fx + cy * fy + rpZ * fz;
     final double d2 = rpX * rpX + cy * cy + rpZ * rpZ - dot * dot;
-    return dot > 0 && d2 <= kPillR * kPillR;
+    return dot > 0 && d2 <= pillR * pillR;
   }
 
   /// Quick grow-in on spawn; targets then live until shot. Pre-round
@@ -928,7 +1052,7 @@ class GameEngine extends ChangeNotifier {
       // Ray-sphere: does the forward ray pass within the sphere's radius?
       final (double cx, double cyy, double cz) =
           toCamera(sphereX, sphereY, sphereZ);
-      if (cz > kNearPlane && math.sqrt(cx * cx + cyy * cyy) <= kSphereR) {
+      if (cz > kNearPlane && math.sqrt(cx * cx + cyy * cyy) <= sphereR) {
         stats.hits++;
         stats.sumKillMs += (clock - _lastHitClock) * 1000;
         _lastHitClock = clock;
@@ -1028,6 +1152,8 @@ class _GameScreenState extends State<GameScreen>
       ..fireYNorm = widget.settings.fireY
       ..fireScale = widget.settings.fireScale
       ..fireOpacity = widget.settings.fireOpacity;
+    _game.stats.scoreScale = kScoreScale[widget.scenario];
+    _game.applyTuning(widget.settings.tune);
     _ticker = createTicker(_tick)..start();
   }
 
@@ -1112,29 +1238,32 @@ class _GameScreenState extends State<GameScreen>
           Container(
             color: kBg.withValues(alpha: 0.88),
             child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('PAUSED', style: _fgStyle(24, spacing: 8)),
-                  const SizedBox(height: 40),
-                  OutlinedButton(
-                    style: _buttonStyle(),
-                    onPressed: () => _setPaused(false),
-                    child: const Text('RESUME'),
-                  ),
-                  const SizedBox(height: 20),
-                  OutlinedButton(
-                    style: _buttonStyle(),
-                    onPressed: widget.onRestart,
-                    child: const Text('RESTART'),
-                  ),
-                  const SizedBox(height: 20),
-                  OutlinedButton(
-                    style: _buttonStyle(),
-                    onPressed: widget.onQuit,
-                    child: const Text('MENU'),
-                  ),
-                ],
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('PAUSED', style: _fgStyle(24, spacing: 8)),
+                    const SizedBox(height: 28),
+                    OutlinedButton(
+                      style: _buttonStyle(),
+                      onPressed: () => _setPaused(false),
+                      child: const Text('RESUME'),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton(
+                      style: _buttonStyle(),
+                      onPressed: widget.onRestart,
+                      child: const Text('RESTART'),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton(
+                      style: _buttonStyle(),
+                      onPressed: widget.onQuit,
+                      child: const Text('MENU'),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1173,6 +1302,46 @@ class _CachedText {
     return _tp!;
   }
 }
+
+// Room geometry builders (top-level so the engine can rebuild the REACTIVE
+// room from its tunable size). zf/zb are the near/far depth planes.
+List<List<(double, double, double)>> buildWalls(double w, double zf, double zb) {
+  const double f = kRoomFloor, c = kRoomCeil;
+  return [
+    [(-w, f, zf), (w, f, zf), (w, f, zb), (-w, f, zb)], // floor
+    [(-w, c, zf), (w, c, zf), (w, c, zb), (-w, c, zb)], // ceiling
+    [(-w, f, zf), (-w, f, zb), (-w, c, zb), (-w, c, zf)], // left wall
+    [(w, f, zf), (w, f, zb), (w, c, zb), (w, c, zf)], // right wall
+    [(-w, f, zb), (w, f, zb), (w, c, zb), (-w, c, zb)], // target wall
+    [(-w, f, zf), (w, f, zf), (w, c, zf), (-w, c, zf)], // behind player
+  ];
+}
+
+List<(double, double, double, double, double, double)> buildRoom(
+    double w, double zf, double zb) {
+  const double f = kRoomFloor, c = kRoomCeil;
+  final lines = <(double, double, double, double, double, double)>[];
+  for (final (double y1, double y2) in [(f, f), (c, c)]) {
+    lines.add((-w, y1, zf, w, y2, zf));
+    lines.add((-w, y1, zb, w, y2, zb));
+    lines.add((-w, y1, zf, -w, y2, zb));
+    lines.add((w, y1, zf, w, y2, zb));
+  }
+  for (final double x in [-w, w]) {
+    lines.add((x, f, zf, x, c, zf));
+    lines.add((x, f, zb, x, c, zb));
+  }
+  return lines;
+}
+
+final List<List<(double, double, double)>> _wallsCubes =
+    buildWalls(kRoomHalfW, kRoomFront, kRoomBack);
+final List<List<(double, double, double)>> _wallsFloat =
+    buildWalls(kRoomHalfW, -kFloatHalfD, kFloatHalfD);
+final List<(double, double, double, double, double, double)> _roomCubes =
+    buildRoom(kRoomHalfW, kRoomFront, kRoomBack);
+final List<(double, double, double, double, double, double)> _roomFloat =
+    buildRoom(kRoomHalfW, -kFloatHalfD, kFloatHalfD);
 
 class _GamePainter extends CustomPainter {
   _GamePainter(this.game, this.settings) : super(repaint: game) {
@@ -1227,32 +1396,15 @@ class _GamePainter extends CustomPainter {
   late final _CachedText _fpsText =
       _CachedText(13, weight: FontWeight.w400, color: settings.arenaAccent);
 
-  // The room's six surfaces as world-space quads, one variant per scenario
-  // (CUBES: player at the front wall; FLOAT 360: player centered). Built once.
-  static final List<List<(double, double, double)>> _wallsCubes =
-      _buildWalls(kRoomFront, kRoomBack);
-  static final List<List<(double, double, double)>> _wallsFloat =
-      _buildWalls(-kFloatHalfD, kFloatHalfD);
-
-  static List<List<(double, double, double)>> _buildWalls(
-      double zf, double zb) {
-    const double w = kRoomHalfW, f = kRoomFloor, c = kRoomCeil;
-    return [
-      [(-w, f, zf), (w, f, zf), (w, f, zb), (-w, f, zb)], // floor
-      [(-w, c, zf), (w, c, zf), (w, c, zb), (-w, c, zb)], // ceiling
-      [(-w, f, zf), (-w, f, zb), (-w, c, zb), (-w, c, zf)], // left wall
-      [(w, f, zf), (w, f, zb), (w, c, zb), (w, c, zf)], // right wall
-      [(-w, f, zb), (w, f, zb), (w, c, zb), (-w, c, zb)], // target wall
-      [(-w, f, zf), (w, f, zf), (w, c, zf), (-w, c, zf)], // behind player
-    ];
-  }
-
   /// Fog-shaded room surfaces: clip each quad against the near plane, then
   /// fill with per-vertex colors (GPU-interpolated; no shader allocation).
   void _paintWalls(Canvas canvas, Size size) {
     final double cx = size.width / 2, cy = size.height / 2, fo = game.focal;
-    final List<List<(double, double, double)>> walls =
-        game.scenario == 0 ? _wallsCubes : _wallsFloat;
+    final List<List<(double, double, double)>> walls = switch (game.scenario) {
+      0 => _wallsCubes,
+      2 => game.reactiveWalls,
+      _ => _wallsFloat,
+    };
     for (final List<(double, double, double)> wall in walls) {
       final List<(double, double, double)> cam = [
         for (final (double x, double y, double z) in wall)
@@ -1293,29 +1445,6 @@ class _GamePainter extends CustomPainter {
   }
 
   static final Paint _wallPaint = Paint();
-
-  // The room: just its 12 edges as world-space segments, per scenario.
-  static final List<(double, double, double, double, double, double)>
-      _roomCubes = _buildRoom(kRoomFront, kRoomBack);
-  static final List<(double, double, double, double, double, double)>
-      _roomFloat = _buildRoom(-kFloatHalfD, kFloatHalfD);
-
-  static List<(double, double, double, double, double, double)> _buildRoom(
-      double zf, double zb) {
-    const double w = kRoomHalfW, f = kRoomFloor, c = kRoomCeil;
-    final lines = <(double, double, double, double, double, double)>[];
-    for (final (double y1, double y2) in [(f, f), (c, c)]) {
-      lines.add((-w, y1, zf, w, y2, zf));
-      lines.add((-w, y1, zb, w, y2, zb));
-      lines.add((-w, y1, zf, -w, y2, zb));
-      lines.add((w, y1, zf, w, y2, zb));
-    }
-    for (final double x in [-w, w]) {
-      lines.add((x, f, zf, x, c, zf));
-      lines.add((x, f, zb, x, c, zb));
-    }
-    return lines;
-  }
 
   // Cube faces: outward normal axis (0=x,1=y,2=z), sign, and the four corner
   // indices (bit layout: x<<2 | y<<1 | z).
@@ -1418,41 +1547,30 @@ class _GamePainter extends CustomPainter {
     }
   }
 
-  /// FLOAT 360 target: shaded ball — dark base with an offset highlight
-  /// clipped to the silhouette.
+  /// FLOAT 360 target: a single flat-colored disc with a thin dark outline.
   void _paintSphere(Canvas canvas, Size size) {
     final (double px, double py, double pz) =
         game.toCamera(game.sphereX, game.sphereY, game.sphereZ);
     if (pz <= kNearPlane) return;
     final double cx = size.width / 2, cy = size.height / 2;
-    final double r = game.focal * kSphereR / pz;
+    final double r = game.focal * game.sphereR / pz;
     final Offset c = Offset(cx + game.focal * px / pz, cy - game.focal * py / pz);
-    final Path silhouette = Path()
-      ..addOval(Rect.fromCircle(center: c, radius: r));
-    canvas.save();
-    canvas.clipPath(silhouette);
-    canvas.drawCircle(c, r, Paint()..color = _shadeBottom);
-    canvas.drawCircle(
-      c + Offset(-r * 0.28, -r * 0.28),
-      r * 0.85,
-      Paint()..color = settings.targetColor,
-    );
-    canvas.restore();
-    canvas.drawPath(silhouette, _cubeEdge);
+    canvas.drawCircle(c, r, Paint()..color = settings.targetColor);
+    canvas.drawCircle(c, r, _cubeEdge);
   }
 
-  /// REACTIVE target: capsule rendered as a round-capped line — body in a
-  /// darker shade with an offset lit core, dark silhouette outline.
+  /// REACTIVE target: capsule rendered as a round-capped line — a single
+  /// flat body color with a thin dark silhouette outline.
   void _paintPill(Canvas canvas, Size size) {
     final (double x1, double y1, double z1) =
-        game.toCamera(game.rpX, kPillYC + kPillHalfH, game.rpZ);
+        game.toCamera(game.rpX, game.pillYC + game.pillHalfH, game.rpZ);
     final (double x2, double y2, double z2) =
-        game.toCamera(game.rpX, kPillYC - kPillHalfH, game.rpZ);
+        game.toCamera(game.rpX, game.pillYC - game.pillHalfH, game.rpZ);
     if (z1 <= kNearPlane || z2 <= kNearPlane) return;
     final double cx = size.width / 2, cy = size.height / 2, fo = game.focal;
     final Offset top = Offset(cx + fo * x1 / z1, cy - fo * y1 / z1);
     final Offset bottom = Offset(cx + fo * x2 / z2, cy - fo * y2 / z2);
-    final double r = fo * kPillR * 2 / (z1 + z2);
+    final double r = fo * game.pillR * 2 / (z1 + z2);
     canvas.drawLine(
       top,
       bottom,
@@ -1465,17 +1583,8 @@ class _GamePainter extends CustomPainter {
       top,
       bottom,
       Paint()
-        ..color = _shadeBottom
-        ..strokeWidth = 2 * r
-        ..strokeCap = StrokeCap.round,
-    );
-    final Offset lift = Offset(-r * 0.22, -r * 0.22);
-    canvas.drawLine(
-      top + lift,
-      bottom + lift,
-      Paint()
         ..color = settings.targetColor
-        ..strokeWidth = 2 * r * 0.6
+        ..strokeWidth = 2 * r
         ..strokeCap = StrokeCap.round,
     );
   }
@@ -1488,7 +1597,11 @@ class _GamePainter extends CustomPainter {
 
     // The room: just its edge lines, no surface tiling.
     for (final (double ax, double ay, double az, double bx, double by,
-        double bz) in (game.scenario == 0 ? _roomCubes : _roomFloat)) {
+        double bz) in (switch (game.scenario) {
+      0 => _roomCubes,
+      2 => game.reactiveRoom,
+      _ => _roomFloat,
+    })) {
       _worldLine(canvas, size, ax, ay, az, bx, by, bz, _edgePaint);
     }
 
@@ -1608,114 +1721,286 @@ TextStyle _fgStyle(double size,
 
 class _MenuScreen extends StatelessWidget {
   const _MenuScreen({
-    required this.best,
-    required this.scenario,
-    required this.onScenario,
-    required this.onStart,
+    required this.topRank,
+    required this.onPlay,
+    required this.onTuning,
     required this.onProfile,
     required this.onRanks,
     required this.onSettings,
   });
 
-  final int best;
-  final int scenario;
-  final ValueChanged<int> onScenario;
-  final VoidCallback onStart;
+  final Rank? topRank;
+  final VoidCallback onPlay;
+  final VoidCallback onTuning;
   final VoidCallback onProfile;
   final VoidCallback onRanks;
   final VoidCallback onSettings;
+
+  Widget _navButton(String label, VoidCallback onTap) => TextButton(
+        onPressed: onTap,
+        child: Text(label,
+            style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+      );
 
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: Center(
-        // Scale the whole menu down uniformly when the screen is too short,
-        // instead of clipping or scrolling.
+        // Scale the whole menu down uniformly when the screen is too short.
         child: FittedBox(
           fit: BoxFit.scaleDown,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 12),
-              const _Crosshair(size: 52),
-              const SizedBox(height: 14),
-              Text('AIM TRAINER',
-                  style: _fgStyle(30, weight: FontWeight.w800, spacing: 8)),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  RankBadge(rank: rankFor(best), size: 22),
-                  const SizedBox(width: 10),
-                  Text('BEST  $best', style: _fgStyle(15)),
-                ],
-              ),
-              const SizedBox(height: 18),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    onPressed: () => onScenario(
-                        (scenario - 1 + kScenarios.length) %
-                            kScenarios.length),
-                    icon: const Icon(Icons.chevron_left, color: kFg),
-                  ),
-                  SizedBox(
-                    width: 160,
-                    child: Text(
-                      kScenarios[scenario],
-                      textAlign: TextAlign.center,
-                      style: _fgStyle(17, spacing: 6),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () =>
-                        onScenario((scenario + 1) % kScenarios.length),
-                    icon: const Icon(Icons.chevron_right, color: kFg),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              OutlinedButton(
-                style: _buttonStyle(),
-                onPressed: onStart,
-                child: const Text('START'),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextButton(
-                    onPressed: onProfile,
-                    child: Text('PROFILE',
-                        style:
-                            _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
-                  ),
-                  const SizedBox(width: 16),
-                  TextButton(
-                    onPressed: onRanks,
-                    child: Text('RANKS',
-                        style:
-                            _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
-                  ),
-                  const SizedBox(width: 16),
-                  TextButton(
-                    onPressed: onSettings,
-                    child: Text('SETTINGS',
-                        style:
-                            _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
-                  ),
-                ],
-              ),
+              const _Logo(size: 76),
+              const SizedBox(height: 16),
+              Text('AIM RANKED',
+                  style: _fgStyle(34, weight: FontWeight.w800, spacing: 10)),
               const SizedBox(height: 10),
-              Text(
-                'SWIPE TO AIM — TAP FIRE TO SHOOT',
-                style: _fgStyle(11, weight: FontWeight.w400, spacing: 3),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RankBadge(rank: topRank, size: 22),
+                  const SizedBox(width: 10),
+                  Text(topRank?.name ?? 'UNRANKED',
+                      style: TextStyle(
+                        color: topRank?.color ?? kFg.withValues(alpha: .55),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 4,
+                      )),
+                ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 26),
+              SizedBox(
+                width: 240,
+                child: OutlinedButton(
+                  style: _buttonStyle(),
+                  onPressed: onPlay,
+                  child: const Text('PLAY'),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _navButton('PROFILE', onProfile),
+                  _navButton('RANKS', onRanks),
+                  _navButton('TUNING', onTuning),
+                  _navButton('SETTINGS', onSettings),
+                ],
+              ),
+              const SizedBox(height: 14),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Play — scenario browser. Each card shows the mode, its description, and the
+// player's best/rank, and starts a round on tap.
+// ---------------------------------------------------------------------------
+class _PlayScreen extends StatelessWidget {
+  const _PlayScreen({
+    required this.bests,
+    required this.onPick,
+    required this.onBack,
+  });
+
+  final Map<int, int> bests;
+  final ValueChanged<int> onPick;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        children: [
+          _settingsHeader('PLAY', onBack),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 8),
+                      for (int i = 0; i < kScenarios.length; i++) _card(i),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _card(int i) {
+    final int best = bests[i] ?? 0;
+    final Rank? rank = rankFor(best);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 7),
+      child: GestureDetector(
+        onTap: () => onPick(i),
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            border: Border.all(color: kFg.withValues(alpha: .3)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(kScenarios[i], style: _fgStyle(20, spacing: 5)),
+                    const SizedBox(height: 6),
+                    Text(
+                      kScenarioDesc[i],
+                      style: TextStyle(
+                        color: kFg.withValues(alpha: .7),
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        RankBadge(rank: rank, size: 20),
+                        const SizedBox(width: 8),
+                        Text('BEST $best',
+                            style:
+                                _fgStyle(12, weight: FontWeight.w400, spacing: 2)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Icon(Icons.play_arrow, color: kFg, size: 34),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tuning — live sliders for every bot parameter, grouped by scenario. Dial
+// to taste; values persist so you can read them back and bake in a default.
+// ---------------------------------------------------------------------------
+class _TuningScreen extends StatefulWidget {
+  const _TuningScreen({
+    required this.settings,
+    required this.onChanged,
+    required this.onBack,
+  });
+
+  final AppSettings settings;
+  final VoidCallback onChanged;
+  final VoidCallback onBack;
+
+  @override
+  State<_TuningScreen> createState() => _TuningScreenState();
+}
+
+class _TuningScreenState extends State<_TuningScreen> {
+  Widget _paramSlider(TuneParam p) {
+    final double v = widget.settings.tv(p.key);
+    final String shown =
+        (p.max <= 3 ? v.toStringAsFixed(2) : v.toStringAsFixed(1));
+    return Column(
+      children: [
+        _settingsSliderRow(p.label, shown),
+        SliderTheme(
+          data: SliderThemeData(
+            activeTrackColor: kFg,
+            inactiveTrackColor: kFg.withValues(alpha: .2),
+            thumbColor: kFg,
+            overlayColor: kFg.withValues(alpha: .12),
+            trackHeight: 2,
+          ),
+          child: Slider(
+            value: v.clamp(p.min, p.max),
+            min: p.min,
+            max: p.max,
+            onChanged: (nv) {
+              setState(() => widget.settings.tune[p.key] = nv);
+            },
+            onChangeEnd: (_) => widget.onChanged(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _group(String title, int scenario) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Text(title,
+              style: TextStyle(
+                color: kFg,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 5,
+              )),
+        ),
+        const SizedBox(height: 6),
+        for (final TuneParam p in kTuneParams.where((p) => p.scenario == scenario))
+          _paramSlider(p),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        children: [
+          _settingsHeader('TUNING', widget.onBack),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: Column(
+                    children: [
+                      _group('FLOAT 360', 1),
+                      _group('REACTIVE', 2),
+                      const SizedBox(height: 14),
+                      TextButton(
+                        onPressed: () {
+                          setState(() {
+                            for (final TuneParam p in kTuneParams) {
+                              widget.settings.tune[p.key] = p.def;
+                            }
+                          });
+                          widget.onChanged();
+                        },
+                        child: Text('RESET TO DEFAULTS',
+                            style: _fgStyle(13,
+                                weight: FontWeight.w500, spacing: 3)),
+                      ),
+                      const SizedBox(height: 24),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1751,24 +2036,26 @@ class _SettingsScreen extends StatelessWidget {
         );
 
     return SafeArea(
-      child: SingleChildScrollView(
-        child: Center(
+      child: Center(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
               Text('SETTINGS', style: _fgStyle(24, spacing: 8)),
-              const SizedBox(height: 28),
+              const SizedBox(height: 22),
               section('CROSSHAIR', onCrosshair),
               section('COLORS', onColors),
               section('HUD', onHud),
               section('GENERAL', onGeneral),
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               TextButton(
                 onPressed: onBack,
                 child: Text('BACK',
                     style: _fgStyle(14, weight: FontWeight.w500, spacing: 4)),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
             ],
           ),
         ),
@@ -2337,8 +2624,9 @@ class _ResultsScreen extends StatelessWidget {
     final Rank? rank = rankFor(stats.score);
     final Rank? next = nextRankFor(stats.score);
     return SafeArea(
-      child: SingleChildScrollView(
-        child: Center(
+      child: Center(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2604,35 +2892,50 @@ class _ProfileScreen extends StatelessWidget {
   }
 }
 
-class _Crosshair extends StatelessWidget {
-  const _Crosshair({required this.size});
+/// Aim Ranked mark: a reticle ring with four ticks and a rank chevron at the
+/// center — "aim" (reticle) meeting "ranked" (the upward chevron).
+class _Logo extends StatelessWidget {
+  const _Logo({required this.size});
 
   final double size;
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(size: Size.square(size), painter: _CrosshairPainter());
+    return CustomPaint(size: Size.square(size), painter: _LogoPainter());
   }
 }
 
-class _CrosshairPainter extends CustomPainter {
+class _LogoPainter extends CustomPainter {
   static final Paint _stroke = Paint()
     ..color = kFg
     ..style = PaintingStyle.stroke
-    ..strokeWidth = 3;
+    ..strokeWidth = 3
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round;
+  static final Paint _fill = Paint()..color = kFg;
 
   @override
   void paint(Canvas canvas, Size size) {
     final Offset c = size.center(Offset.zero);
     final double r = size.shortestSide / 2 - 2;
-    canvas.drawCircle(c, r * 0.72, _stroke);
-    canvas.drawCircle(c, r * 0.08, Paint()..color = kFg);
+    // Reticle ring.
+    canvas.drawCircle(c, r * 0.82, _stroke);
+    // Four ticks, gapped from the ring inward.
     for (final double a in [0, math.pi / 2, math.pi, 3 * math.pi / 2]) {
       final Offset dir = Offset(math.cos(a), math.sin(a));
-      canvas.drawLine(c + dir * (r * 0.45), c + dir * r, _stroke);
+      canvas.drawLine(c + dir * (r * 0.82), c + dir * r, _stroke);
     }
+    // Centered rank chevron (points up).
+    final double w = r * 0.42, h = r * 0.30;
+    final Path chevron = Path()
+      ..moveTo(c.dx - w, c.dy + h * 0.6)
+      ..lineTo(c.dx, c.dy - h)
+      ..lineTo(c.dx + w, c.dy + h * 0.6);
+    canvas.drawPath(chevron, _stroke);
+    // Small dot beneath, completing the reticle center.
+    canvas.drawCircle(c + Offset(0, r * 0.42), r * 0.07, _fill);
   }
 
   @override
-  bool shouldRepaint(_CrosshairPainter oldDelegate) => false;
+  bool shouldRepaint(_LogoPainter oldDelegate) => false;
 }

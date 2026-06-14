@@ -11,6 +11,7 @@ dependencies:
   flutter:
     sdk: flutter
   shared_preferences: ^2.3.0
+  flutter_displaymode: ^0.6.0
 
 dev_dependencies:
   flutter_test:
