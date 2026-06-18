@@ -815,6 +815,8 @@ class GameEngine extends ChangeNotifier {
       const [];
   List<(double, double, double, double, double, double)> reactiveFloor =
       const [];
+  List<(double, double, double, double, double, double)> reactiveWallGrid =
+      const [];
 
   /// Copy tuning from settings and (re)build geometry. Call at round start.
   void applyTuning(Map<String, double> t) {
@@ -823,6 +825,7 @@ class GameEngine extends ChangeNotifier {
     reactiveWalls = buildWalls(w, -w, w);
     reactiveRoom = buildRoom(w, -w, w);
     reactiveFloor = buildFloorGrid(w, -w, w, 2);
+    reactiveWallGrid = buildWallGrid(w, -w, w, 2);
     sDist = (tv('fl_distmin') + tv('fl_distmax')) / 2;
     rDist = (tv('re_distmin') + tv('re_distmax')) / 2;
   }
@@ -1499,6 +1502,27 @@ List<(double, double, double, double, double, double)> buildFloorGrid(
   return lines;
 }
 
+/// Vertical floor-to-ceiling lines on all four walls of the [-w..w] box, at the
+/// given spacing. In REACTIVE the camera yaws to track an orbiting target;
+/// these fixed verticals sweep across the view and reverse when the target
+/// changes direction, giving the reversal cue a flat wall can't.
+List<(double, double, double, double, double, double)> buildWallGrid(
+    double w, double zf, double zb, double spacing) {
+  const double f = kRoomFloor, c = kRoomCeil;
+  final lines = <(double, double, double, double, double, double)>[];
+  // Front (z=zf) and back (z=zb) walls: verticals stepped along x.
+  for (double x = -w; x <= w + 1e-6; x += spacing) {
+    lines.add((x, f, zf, x, c, zf));
+    lines.add((x, f, zb, x, c, zb));
+  }
+  // Left (x=-w) and right (x=w) walls: verticals stepped along z.
+  for (double z = zf; z <= zb + 1e-6; z += spacing) {
+    lines.add((-w, f, z, -w, c, z));
+    lines.add((w, f, z, w, c, z));
+  }
+  return lines;
+}
+
 final List<List<(double, double, double)>> _wallsCubes =
     buildWalls(kRoomHalfW, kRoomFront, kRoomBack);
 final List<List<(double, double, double)>> _wallsFloat =
@@ -1523,6 +1547,12 @@ class _GamePainter extends CustomPainter {
       ..strokeWidth = 1.5;
     _gridPaint
       ..color = settings.arenaAccent.withValues(alpha: 0.14)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    // Wall verticals a touch brighter than the floor grid — the fog darkens the
+    // walls, so the reference lines need more contrast to read while tracking.
+    _wallGridPaint
+      ..color = settings.arenaAccent.withValues(alpha: 0.22)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
     _cubeEdge.color = settings.arenaBg;
@@ -1576,6 +1606,7 @@ class _GamePainter extends CustomPainter {
   final Paint _accentFill = Paint();
   final Paint _edgePaint = Paint();
   final Paint _gridPaint = Paint();
+  final Paint _wallGridPaint = Paint();
   final Paint _cubeFill = Paint();
   final Paint _sphereFill = Paint();
   final Paint _pillCore = Paint();
@@ -1806,11 +1837,16 @@ class _GamePainter extends CustomPainter {
     canvas.drawRect(Offset.zero & size, _bgPaint);
     _paintWalls(canvas, size);
 
-    // REACTIVE: a dim floor grid for horizontal reference while strafing.
+    // REACTIVE: a dim floor grid plus vertical wall lines, so both depth and
+    // the orbiting target's direction changes are readable against fixed refs.
     if (game.scenario == 2) {
       for (final (double ax, double ay, double az, double bx, double by,
           double bz) in game.reactiveFloor) {
         _worldLine(canvas, size, ax, ay, az, bx, by, bz, _gridPaint);
+      }
+      for (final (double ax, double ay, double az, double bx, double by,
+          double bz) in game.reactiveWallGrid) {
+        _worldLine(canvas, size, ax, ay, az, bx, by, bz, _wallGridPaint);
       }
     }
 
