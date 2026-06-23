@@ -25,6 +25,7 @@ First-person, FPS-style controls, landscape-locked:
 | **FLOAT 360** | track | Track a single sphere drifting around you in full 360°. Smooth tracking and movement reading. Hold FIRE for full-auto. |
 | **REACTIVE** | track | Track a strafing pill that jukes left/right and pushes in/out (KovaaK "Close Fast Strafes" style). Floor grid + vertical wall references make direction changes readable. Hold FIRE for full-auto. |
 | **BARDPILL** | click | Pop four small static spheres on a single wall (KovaaK "1w4ts" style). Precise one-shot clicking and fast switching. |
+| **REFLEX 360** | track | Track a sphere that snaps to new headings instantly — infinite acceleration, zero easing. Reflex-heavy 360° tracking. Hold FIRE for full-auto. |
 
 ### Scoring & ranks
 
@@ -100,6 +101,9 @@ Run checks with `flutter analyze && flutter test`.
 - Gameplay constants live at the top of [lib/main.dart](lib/main.dart): round
   length, target counts/sizes, scoring scales, the rank ladder (`kRanks`), and
   the two default palette colors (`kBg` / `kFg`).
-- Per-scenario bot behavior (FLOAT 360 and REACTIVE) is described by
-  `kTuneParams`. A hidden TUNING menu can adjust these live; the values here
-  are the baked-in defaults.
+- Per-scenario bot behavior (FLOAT 360, REACTIVE, REFLEX 360) is described by
+  `kTuneParams`. The in-app **TUNING** menu (from the main menu) adjusts these
+  live and persists them; the `kTuneParams` values are the defaults. Note
+  REFLEX 360 has no acceleration slider — it runs at infinite acceleration by
+  design.
+  

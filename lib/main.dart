@@ -112,7 +112,13 @@ enum _Screen {
   results,
 }
 
-const List<String> kScenarios = ['CUBES', 'FLOAT 360', 'REACTIVE', 'BARDPILL'];
+const List<String> kScenarios = [
+  'CUBES',
+  'FLOAT 360',
+  'REACTIVE',
+  'BARDPILL',
+  'REFLEX 360',
+];
 
 const List<String> kScenarioDesc = [
   'Flick between static cubes on the far wall. Pure target switching, '
@@ -123,6 +129,8 @@ const List<String> kScenarioDesc = [
       'Reactive tracking under pressure.',
   'Pop four small static spheres on a single wall. Precise one-shot '
       'clicking and fast target switching.',
+  'Track a sphere that snaps to new headings instantly — infinite '
+      'acceleration, zero easing. Reflex-heavy 360° tracking.',
 ];
 
 // ---------------------------------------------------------------------------
@@ -163,6 +171,17 @@ const List<TuneParam> kTuneParams = [
   TuneParam(2, 're_room', 'ROOM SIZE', 6.0, 24.0, 14.0),
   TuneParam(2, 're_distmin', 'MIN DISTANCE', 2.0, 14.0, 4.0),
   TuneParam(2, 're_distmax', 'MAX DISTANCE', 2.0, 18.0, 9.0),
+  // REFLEX 360 — FLOAT's orbit model but with infinite acceleration (no accel
+  // param: velocity snaps instantly). Target size defaults 10% above FLOAT's
+  // 0.33. Snappier change cadence makes it juke more often.
+  TuneParam(4, 'rx_orbit', 'ORBIT SPEED', 0.5, 5.0, 2.2),
+  TuneParam(4, 'rx_vert', 'VERTICAL SPEED', 0.0, 1.5, 0.8),
+  TuneParam(4, 'rx_depth', 'DEPTH SPEED', 0.0, 4.0, 2.6),
+  TuneParam(4, 'rx_chmin', 'CHANGE MIN (S)', 0.05, 2.0, 0.12),
+  TuneParam(4, 'rx_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.35),
+  TuneParam(4, 'rx_size', 'TARGET SIZE', 0.1, 0.7, 0.363),
+  TuneParam(4, 'rx_distmin', 'MIN DISTANCE', 2.0, 8.0, 4.7),
+  TuneParam(4, 'rx_distmax', 'MAX DISTANCE', 2.0, 8.0, 7.1),
 ];
 
 final Map<String, double> kTuneDefaults = {
@@ -343,8 +362,9 @@ void drawFireButton(Canvas canvas, Offset c, double r, double op) {
 // Per-scenario score multiplier, indexed by scenario. Tracking modes
 // (full-auto) are scaled so a Celestial-tier run (~60% uptime, full round)
 // lands on the same ~400 as a Celestial CUBES run. BARDPILL is a click mode
-// like CUBES, so it shares the 1.0 ladder. See kRanks.
-const List<double> kScoreScale = [1.0, 1.43, 1.43, 1.0];
+// like CUBES, so it shares the 1.0 ladder. REFLEX 360 is full-auto tracking
+// like FLOAT/REACTIVE, so it shares the 1.43 scale. See kRanks.
+const List<double> kScoreScale = [1.0, 1.43, 1.43, 1.0, 1.43];
 
 class RoundStats {
   int hits = 0;
@@ -809,7 +829,7 @@ class GameEngine extends ChangeNotifier {
   // Bot tuning values, shared from AppSettings at round start.
   Map<String, double> tune = kTuneDefaults;
   double tv(String k) => tune[k] ?? kTuneDefaults[k]!;
-  double get sphereR => tv('fl_size');
+  double get sphereR => scenario == 4 ? tv('rx_size') : tv('fl_size');
   double get pillR => tv('re_size');
   double get pillHalfH => tv('re_height');
   double get pillYC => kRoomFloor + pillHalfH + pillR;
@@ -833,7 +853,11 @@ class GameEngine extends ChangeNotifier {
     reactiveRoom = buildRoom(w, -w, w);
     reactiveFloor = buildFloorGrid(w, -w, w, 2);
     reactiveWallGrid = buildWallGrid(w, -w, w, 2);
-    sDist = (tv('fl_distmin') + tv('fl_distmax')) / 2;
+    // The orbiting-sphere modes (FLOAT 360 / REFLEX 360) share the sAz/sEl/
+    // sDist state; seed the distance from whichever mode is active.
+    sDist = scenario == 4
+        ? (tv('rx_distmin') + tv('rx_distmax')) / 2
+        : (tv('fl_distmin') + tv('fl_distmax')) / 2;
     rDist = (tv('re_distmin') + tv('re_distmax')) / 2;
   }
 
@@ -943,14 +967,16 @@ class GameEngine extends ChangeNotifier {
       _updateFloat(dt);
     } else if (scenario == 2) {
       _updateReactive(dt);
+    } else if (scenario == 4) {
+      _updateReflex(dt);
     } else if (arena != Size.zero) {
       while (targets.length < _targetCount) {
         targets.add(_spawn());
       }
     }
-    // Tracking modes (FLOAT/REACTIVE): a held trigger fires full-auto. Click
-    // modes (CUBES/BARDPILL) fire one shot per press.
-    if ((scenario == 1 || scenario == 2) && firePressed) {
+    // Tracking modes (FLOAT/REACTIVE/REFLEX): a held trigger fires full-auto.
+    // Click modes (CUBES/BARDPILL) fire one shot per press.
+    if ((scenario == 1 || scenario == 2 || scenario == 4) && firePressed) {
       _autoFireT -= dt;
       if (_autoFireT <= 0) {
         shoot();
@@ -990,6 +1016,42 @@ class GameEngine extends ChangeNotifier {
     }
     final double dlo = math.min(tv('fl_distmin'), tv('fl_distmax'));
     final double dhi = math.max(tv('fl_distmin'), tv('fl_distmax'));
+    if (sDist > dhi) {
+      sDist = dhi;
+      tDist = -tDist.abs();
+    } else if (sDist < dlo) {
+      sDist = dlo;
+      tDist = tDist.abs();
+    }
+  }
+
+  /// REFLEX 360: same spherical orbit as FLOAT, but velocity snaps to each new
+  /// heading instantly (infinite acceleration) — no easing — so the sphere
+  /// changes direction without any wind-up, demanding pure reflex tracking.
+  void _updateReflex(double dt) {
+    _retargetT -= dt;
+    if (_retargetT <= 0) {
+      _retargetT = tv('rx_chmin') + _rng.nextDouble() * tv('rx_chrange');
+      tAz = (_rng.nextDouble() * 2 - 1) * tv('rx_orbit');
+      tEl = (_rng.nextDouble() * 2 - 1) * tv('rx_vert');
+      tDist = (_rng.nextDouble() * 2 - 1) * tv('rx_depth');
+    }
+    // Infinite acceleration: velocity equals the target heading immediately.
+    vAz = tAz;
+    vEl = tEl;
+    vDist = tDist;
+    sAz += vAz * dt;
+    sEl += vEl * dt;
+    sDist += vDist * dt;
+    if (sEl > 0.55) {
+      sEl = 0.55;
+      tEl = -tEl.abs();
+    } else if (sEl < -0.15) {
+      sEl = -0.15;
+      tEl = tEl.abs();
+    }
+    final double dlo = math.min(tv('rx_distmin'), tv('rx_distmax'));
+    final double dhi = math.max(tv('rx_distmin'), tv('rx_distmax'));
     if (sDist > dhi) {
       sDist = dhi;
       tDist = -tDist.abs();
@@ -1115,7 +1177,7 @@ class GameEngine extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    if (scenario == 1) {
+    if (scenario == 1 || scenario == 4) {
       // Ray-sphere: does the forward ray pass within the sphere's radius?
       final (double cx, double cyy, double cz) =
           toCamera(sphereX, sphereY, sphereZ);
@@ -1923,7 +1985,7 @@ class _GamePainter extends CustomPainter {
       tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2 - 70));
     }
 
-    if (game.scenario == 1) {
+    if (game.scenario == 1 || game.scenario == 4) {
       _paintSphere(canvas, size);
     } else if (game.scenario == 2) {
       _paintPill(canvas, size);
@@ -2102,9 +2164,7 @@ class _MenuScreen extends StatelessWidget {
                 children: [
                   _navButton('PROFILE', onProfile),
                   _navButton('RANKS', onRanks),
-                  // TUNING hidden for now — re-add this nav button to expose
-                  // the bot-tuning screen again (screen + wiring kept intact).
-                  // _navButton('TUNING', onTuning),
+                  _navButton('TUNING', onTuning),
                   _navButton('SETTINGS', onSettings),
                 ],
               ),
@@ -2296,6 +2356,7 @@ class _TuningScreenState extends State<_TuningScreen> {
                     children: [
                       _group('FLOAT 360', 1),
                       _group('REACTIVE', 2),
+                      _group('REFLEX 360', 4),
                       const SizedBox(height: 14),
                       TextButton(
                         onPressed: () {
