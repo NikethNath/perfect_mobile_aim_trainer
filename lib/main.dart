@@ -31,10 +31,12 @@ const List<Color> kTargetColors = [
 // Gameplay tuning.
 const double kRoundSeconds = 60;
 const int kMaxTargets = 3;
+const int kBardCount = 4; // BARDPILL: four small spheres on one wall
 const double kGrowTime = 0.1;
 
 // 3D tuning.
 const double kCubeHalf = 0.5; // target cube half-extent (world units)
+const double kBardR = 0.3; // BARDPILL sphere radius (world units) — small
 const double kLookSens = 0.0042; // radians per logical pixel of swipe
 const double kPitchLimit = 1.1; // radians
 const double kNearPlane = 0.2;
@@ -110,7 +112,7 @@ enum _Screen {
   results,
 }
 
-const List<String> kScenarios = ['CUBES', 'FLOAT 360', 'REACTIVE'];
+const List<String> kScenarios = ['CUBES', 'FLOAT 360', 'REACTIVE', 'BARDPILL'];
 
 const List<String> kScenarioDesc = [
   'Flick between static cubes on the far wall. Pure target switching, '
@@ -119,6 +121,8 @@ const List<String> kScenarioDesc = [
       'and movement reading.',
   'Track a strafing bot that jukes left/right and pushes in and out. '
       'Reactive tracking under pressure.',
+  'Pop four small static spheres on a single wall. Precise one-shot '
+      'clicking and fast target switching.',
 ];
 
 // ---------------------------------------------------------------------------
@@ -338,8 +342,9 @@ void drawFireButton(Canvas canvas, Offset c, double r, double op) {
 
 // Per-scenario score multiplier, indexed by scenario. Tracking modes
 // (full-auto) are scaled so a Celestial-tier run (~60% uptime, full round)
-// lands on the same ~400 as a Celestial CUBES run. See kRanks.
-const List<double> kScoreScale = [1.0, 1.43, 1.43];
+// lands on the same ~400 as a Celestial CUBES run. BARDPILL is a click mode
+// like CUBES, so it shares the 1.0 ladder. See kRanks.
+const List<double> kScoreScale = [1.0, 1.43, 1.43, 1.0];
 
 class RoundStats {
   int hits = 0;
@@ -808,6 +813,8 @@ class GameEngine extends ChangeNotifier {
   double get pillR => tv('re_size');
   double get pillHalfH => tv('re_height');
   double get pillYC => kRoomFloor + pillHalfH + pillR;
+  // Static-target modes keep a fixed number of targets on the wall.
+  int get _targetCount => scenario == 3 ? kBardCount : kMaxTargets;
 
   // REACTIVE arena geometry, rebuilt from the tunable room size at setup.
   List<List<(double, double, double)>> reactiveWalls = const [];
@@ -922,8 +929,8 @@ class GameEngine extends ChangeNotifier {
       // Pre-round: targets are already placed and visible, just frozen.
       // Spawn them already grown (born in the past) so they stay full-size
       // through the first shot instead of collapsing to a zero-size pop-in.
-      if (scenario == 0 && arena != Size.zero) {
-        while (targets.length < kMaxTargets) {
+      if ((scenario == 0 || scenario == 3) && arena != Size.zero) {
+        while (targets.length < _targetCount) {
           final TargetCube c = _spawn();
           targets.add(TargetCube(c.x, c.y, c.z, -kGrowTime));
         }
@@ -937,12 +944,13 @@ class GameEngine extends ChangeNotifier {
     } else if (scenario == 2) {
       _updateReactive(dt);
     } else if (arena != Size.zero) {
-      while (targets.length < kMaxTargets) {
+      while (targets.length < _targetCount) {
         targets.add(_spawn());
       }
     }
-    // Tracking modes: a held trigger fires full-auto.
-    if (scenario != 0 && firePressed) {
+    // Tracking modes (FLOAT/REACTIVE): a held trigger fires full-auto. Click
+    // modes (CUBES/BARDPILL) fire one shot per press.
+    if ((scenario == 1 || scenario == 2) && firePressed) {
       _autoFireT -= dt;
       if (_autoFireT <= 0) {
         shoot();
@@ -1043,25 +1051,31 @@ class GameEngine extends ChangeNotifier {
     return dot > 0 && d2 <= pillR * pillR;
   }
 
-  /// Quick grow-in on spawn; targets then live until shot. Pre-round
+  /// Quick grow-in on spawn (0..1); targets then live until shot. Pre-round
   /// targets stand at full size so the player sees them before starting.
-  double halfOf(TargetCube t) {
+  double _grow(TargetCube t) {
     final double age = started ? clock - t.born : kGrowTime;
-    final double grow =
-        Curves.easeOutBack.transform((age / kGrowTime).clamp(0.0, 1.0));
-    return kCubeHalf * grow;
+    return Curves.easeOutBack.transform((age / kGrowTime).clamp(0.0, 1.0));
   }
 
-  /// Cubes spawn against the wall opposite the player.
+  double halfOf(TargetCube t) => kCubeHalf * _grow(t); // CUBES half-extent
+  double bardRadiusOf(TargetCube t) => kBardR * _grow(t); // BARDPILL radius
+
+  /// Static targets spawn against the wall opposite the player. CUBES uses
+  /// big cubes; BARDPILL uses small, tightly-packed spheres.
   TargetCube _spawn() {
-    const double z = kRoomBack - kCubeHalf - 0.3;
+    final bool bard = scenario == 3;
+    final double half = bard ? kBardR : kCubeHalf;
+    final double z = kRoomBack - half - 0.3;
+    final double sep = bard ? 1.5 : 2.2; // min center separation
+    final double xspan = kRoomHalfW - (bard ? 1.2 : 2.0);
     double x = 0, y = 1.5;
     for (int i = 0; i < 24; i++) {
-      x = (_rng.nextDouble() * 2 - 1) * (kRoomHalfW - 2);
+      x = (_rng.nextDouble() * 2 - 1) * xspan;
       y = kRoomFloor + 1.0 + _rng.nextDouble() * (kRoomCeil - kRoomFloor - 2.5);
       final bool clear = targets.every((t) {
         final double dx = x - t.x, dy = y - t.y;
-        return dx * dx + dy * dy > 2.2 * 2.2;
+        return dx * dx + dy * dy > sep * sep;
       });
       if (clear) break;
     }
@@ -1118,6 +1132,31 @@ class GameEngine extends ChangeNotifier {
     final double fx = cp * math.sin(yaw);
     final double fy = math.sin(pitch);
     final double fz = cp * math.cos(yaw);
+    if (scenario == 3) {
+      // Ray-sphere against each target; nearest along the ray wins.
+      int hitIdx = -1;
+      double hitT = double.infinity;
+      for (int i = 0; i < targets.length; i++) {
+        final TargetCube t = targets[i];
+        final double tc = t.x * fx + t.y * fy + t.z * fz; // dist along ray
+        if (tc <= kNearPlane) continue;
+        final double r = bardRadiusOf(t);
+        final double perp2 = (t.x * t.x + t.y * t.y + t.z * t.z) - tc * tc;
+        if (perp2 <= r * r && tc < hitT) {
+          hitIdx = i;
+          hitT = tc;
+        }
+      }
+      if (hitIdx >= 0) {
+        final TargetCube t = targets.removeAt(hitIdx);
+        _registerHit(t.born);
+        targets.add(_spawn());
+      } else {
+        _registerMiss();
+      }
+      notifyListeners();
+      return;
+    }
     int best = -1;
     double bestT = double.infinity;
     for (int i = 0; i < targets.length; i++) {
@@ -1578,7 +1617,7 @@ class _GamePainter extends CustomPainter {
     // Fog depends only on distance to the eye, and the camera only rotates
     // (which preserves distance) — so corner colors are constant per round.
     _walls = switch (game.scenario) {
-      0 => _wallsCubes,
+      0 || 3 => _wallsCubes, // CUBES + BARDPILL share the far-wall room
       2 => game.reactiveWalls,
       _ => _wallsFloat,
     };
@@ -1815,6 +1854,18 @@ class _GamePainter extends CustomPainter {
     canvas.drawCircle(c, r, _cubeEdge);
   }
 
+  /// BARDPILL target: a small flat sphere on the wall, with a thin dark
+  /// silhouette outline like the cubes.
+  void _paintBardSphere(Canvas canvas, Size size, TargetCube t) {
+    final (double px, double py, double pz) = game.toCamera(t.x, t.y, t.z);
+    if (pz <= kNearPlane) return;
+    final double cx = size.width / 2, cy = size.height / 2, fo = game.focal;
+    final double r = fo * game.bardRadiusOf(t) / pz;
+    final Offset c = Offset(cx + fo * px / pz, cy - fo * py / pz);
+    canvas.drawCircle(c, r, _sphereFill);
+    canvas.drawCircle(c, r, _cubeEdge);
+  }
+
   /// REACTIVE target: capsule rendered as a round-capped line — a single
   /// flat body color with a thin dark silhouette outline.
   void _paintPill(Canvas canvas, Size size) {
@@ -1853,7 +1904,7 @@ class _GamePainter extends CustomPainter {
     // The room edge lines.
     for (final (double ax, double ay, double az, double bx, double by,
         double bz) in (switch (game.scenario) {
-      0 => _roomCubes,
+      0 || 3 => _roomCubes,
       2 => game.reactiveRoom,
       _ => _roomFloat,
     })) {
@@ -1877,16 +1928,21 @@ class _GamePainter extends CustomPainter {
     } else if (game.scenario == 2) {
       _paintPill(canvas, size);
     } else {
-      // Targets, far-to-near (they share a wall plane, so center-distance
-      // ordering is fine).
+      // Static targets, far-to-near (they share a wall plane, so
+      // center-distance ordering is fine).
       final List<TargetCube> ordered = List.of(game.targets)
         ..sort((a, b) {
           final double da = a.x * a.x + a.y * a.y + a.z * a.z;
           final double db = b.x * b.x + b.y * b.y + b.z * b.z;
           return db.compareTo(da);
         });
+      final bool bard = game.scenario == 3;
       for (final TargetCube t in ordered) {
-        _paintCube(canvas, size, t);
+        if (bard) {
+          _paintBardSphere(canvas, size, t);
+        } else {
+          _paintCube(canvas, size, t);
+        }
       }
     }
 

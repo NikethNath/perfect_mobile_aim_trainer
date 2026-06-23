@@ -36,4 +36,9 @@ void main() {
       expect(p.def, inInclusiveRange(p.min, p.max));
     }
   });
+
+  test('every scenario has a description and a score scale', () {
+    expect(kScenarioDesc.length, kScenarios.length);
+    expect(kScoreScale.length, kScenarios.length);
+  });
 }
