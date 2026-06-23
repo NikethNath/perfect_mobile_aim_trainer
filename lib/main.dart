@@ -37,6 +37,7 @@ const double kGrowTime = 0.1;
 // 3D tuning.
 const double kCubeHalf = 0.5; // target cube half-extent (world units)
 const double kBardR = 0.3; // BARDPILL sphere radius (world units) — small
+const double kWiggleY = 0.0; // WIGGLE head height: eye level (screen center)
 const double kLookSens = 0.0042; // radians per logical pixel of swipe
 const double kPitchLimit = 1.1; // radians
 const double kNearPlane = 0.2;
@@ -118,6 +119,7 @@ const List<String> kScenarios = [
   'REACTIVE',
   'BARDPILL',
   'REFLEX 360',
+  'WIGGLE',
 ];
 
 const List<String> kScenarioDesc = [
@@ -131,6 +133,8 @@ const List<String> kScenarioDesc = [
       'clicking and fast target switching.',
   'Track a sphere that snaps to new headings instantly — infinite '
       'acceleration, zero easing. Reflex-heavy 360° tracking.',
+  'Hold on a small head-height sphere jittering within a tiny area — slow '
+      'micro-movements with constant direction changes. Precision tracking.',
 ];
 
 // ---------------------------------------------------------------------------
@@ -182,6 +186,16 @@ const List<TuneParam> kTuneParams = [
   TuneParam(4, 'rx_size', 'TARGET SIZE', 0.1, 0.7, 0.363),
   TuneParam(4, 'rx_distmin', 'MIN DISTANCE', 2.0, 8.0, 4.7),
   TuneParam(4, 'rx_distmax', 'MAX DISTANCE', 2.0, 8.0, 7.1),
+  // WIGGLE — a small sphere that jitters within a tiny 2D area at a fixed
+  // distance (head-height), both axes wiggling independently. All sizing and
+  // movement values are tunable here.
+  TuneParam(5, 'wg_speed', 'SPEED', 0.1, 4.0, 0.8),
+  TuneParam(5, 'wg_amp', 'RANGE', 0.1, 3.0, 0.6),
+  TuneParam(5, 'wg_chmin', 'CHANGE MIN (S)', 0.05, 1.0, 0.12),
+  TuneParam(5, 'wg_chrange', 'CHANGE SPREAD (S)', 0.0, 1.0, 0.18),
+  TuneParam(5, 'wg_accel', 'ACCELERATION', 1.0, 20.0, 9.0),
+  TuneParam(5, 'wg_size', 'TARGET SIZE', 0.1, 0.6, 0.28),
+  TuneParam(5, 'wg_dist', 'DISTANCE', 3.0, 10.0, 6.0),
 ];
 
 final Map<String, double> kTuneDefaults = {
@@ -363,8 +377,9 @@ void drawFireButton(Canvas canvas, Offset c, double r, double op) {
 // (full-auto) are scaled so a Celestial-tier run (~60% uptime, full round)
 // lands on the same ~400 as a Celestial CUBES run. BARDPILL is a click mode
 // like CUBES, so it shares the 1.0 ladder. REFLEX 360 is full-auto tracking
-// like FLOAT/REACTIVE, so it shares the 1.43 scale. See kRanks.
-const List<double> kScoreScale = [1.0, 1.43, 1.43, 1.0, 1.43];
+// like FLOAT/REACTIVE, so it shares the 1.43 scale. WIGGLE is also full-auto
+// tracking → 1.43. See kRanks.
+const List<double> kScoreScale = [1.0, 1.43, 1.43, 1.0, 1.43, 1.43];
 
 class RoundStats {
   int hits = 0;
@@ -829,7 +844,11 @@ class GameEngine extends ChangeNotifier {
   // Bot tuning values, shared from AppSettings at round start.
   Map<String, double> tune = kTuneDefaults;
   double tv(String k) => tune[k] ?? kTuneDefaults[k]!;
-  double get sphereR => scenario == 4 ? tv('rx_size') : tv('fl_size');
+  double get sphereR => switch (scenario) {
+        4 => tv('rx_size'),
+        5 => tv('wg_size'),
+        _ => tv('fl_size'),
+      };
   double get pillR => tv('re_size');
   double get pillHalfH => tv('re_height');
   double get pillYC => kRoomFloor + pillHalfH + pillR;
@@ -870,9 +889,19 @@ class GameEngine extends ChangeNotifier {
   double _retargetT = 0;
   double _lastHitClock = 0;
 
-  double get sphereX => sDist * math.cos(sEl) * math.sin(sAz);
-  double get sphereY => sDist * math.sin(sEl);
-  double get sphereZ => sDist * math.cos(sEl) * math.cos(sAz);
+  // WIGGLE state: a small sphere jittering inside a tiny 2D box at a fixed
+  // distance. Each axis has its own velocity and retarget timer so the motion
+  // isn't diagonal-locked — it reads like a head making small adjustments.
+  double wX = 0, wY = 0; // offset from box center
+  double wgVx = 0, wgVy = 0; // current velocity per axis
+  double wgTVx = 0, wgTVy = 0; // velocity the easing chases
+  double _wgTx = 0, _wgTy = 0; // per-axis retarget timers
+
+  double get sphereX => scenario == 5 ? wX : sDist * math.cos(sEl) * math.sin(sAz);
+  double get sphereY =>
+      scenario == 5 ? kWiggleY + wY : sDist * math.sin(sEl);
+  double get sphereZ =>
+      scenario == 5 ? tv('wg_dist') : sDist * math.cos(sEl) * math.cos(sAz);
 
   // REACTIVE state: a pill that orbit-strafes around the centered player and
   // pushes in/out. Erratic leg lengths, snappy accel/decel.
@@ -969,14 +998,17 @@ class GameEngine extends ChangeNotifier {
       _updateReactive(dt);
     } else if (scenario == 4) {
       _updateReflex(dt);
+    } else if (scenario == 5) {
+      _updateWiggle(dt);
     } else if (arena != Size.zero) {
       while (targets.length < _targetCount) {
         targets.add(_spawn());
       }
     }
-    // Tracking modes (FLOAT/REACTIVE/REFLEX): a held trigger fires full-auto.
-    // Click modes (CUBES/BARDPILL) fire one shot per press.
-    if ((scenario == 1 || scenario == 2 || scenario == 4) && firePressed) {
+    // Tracking modes (FLOAT/REACTIVE/REFLEX/WIGGLE): a held trigger fires
+    // full-auto. Click modes (CUBES/BARDPILL) fire one shot per press.
+    if ((scenario == 1 || scenario == 2 || scenario == 4 || scenario == 5) &&
+        firePressed) {
       _autoFireT -= dt;
       if (_autoFireT <= 0) {
         shoot();
@@ -1058,6 +1090,45 @@ class GameEngine extends ChangeNotifier {
     } else if (sDist < dlo) {
       sDist = dlo;
       tDist = tDist.abs();
+    }
+  }
+
+  /// WIGGLE: a small sphere making slow micro-movements within a tiny 2D box at
+  /// a fixed distance. X and Y wiggle independently (separate timers) and bounce
+  /// off the box edges — head-like jitter for precision tracking.
+  void _updateWiggle(double dt) {
+    final double sp = tv('wg_speed');
+    final double amp = tv('wg_amp');
+    final double k = math.min(1, dt * tv('wg_accel'));
+    // X axis
+    _wgTx -= dt;
+    if (_wgTx <= 0) {
+      _wgTx = tv('wg_chmin') + _rng.nextDouble() * tv('wg_chrange');
+      wgTVx = (_rng.nextBool() ? 1 : -1) * sp;
+    }
+    // Y axis — independent timer so motion isn't locked to a diagonal.
+    _wgTy -= dt;
+    if (_wgTy <= 0) {
+      _wgTy = tv('wg_chmin') + _rng.nextDouble() * tv('wg_chrange');
+      wgTVy = (_rng.nextBool() ? 1 : -1) * sp;
+    }
+    wgVx += (wgTVx - wgVx) * k;
+    wgVy += (wgTVy - wgVy) * k;
+    wX += wgVx * dt;
+    wY += wgVy * dt;
+    if (wX > amp) {
+      wX = amp;
+      wgTVx = -wgTVx.abs();
+    } else if (wX < -amp) {
+      wX = -amp;
+      wgTVx = wgTVx.abs();
+    }
+    if (wY > amp) {
+      wY = amp;
+      wgTVy = -wgTVy.abs();
+    } else if (wY < -amp) {
+      wY = -amp;
+      wgTVy = wgTVy.abs();
     }
   }
 
@@ -1177,7 +1248,7 @@ class GameEngine extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    if (scenario == 1 || scenario == 4) {
+    if (scenario == 1 || scenario == 4 || scenario == 5) {
       // Ray-sphere: does the forward ray pass within the sphere's radius?
       final (double cx, double cyy, double cz) =
           toCamera(sphereX, sphereY, sphereZ);
@@ -1985,7 +2056,7 @@ class _GamePainter extends CustomPainter {
       tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2 - 70));
     }
 
-    if (game.scenario == 1 || game.scenario == 4) {
+    if (game.scenario == 1 || game.scenario == 4 || game.scenario == 5) {
       _paintSphere(canvas, size);
     } else if (game.scenario == 2) {
       _paintPill(canvas, size);
@@ -2357,6 +2428,7 @@ class _TuningScreenState extends State<_TuningScreen> {
                       _group('FLOAT 360', 1),
                       _group('REACTIVE', 2),
                       _group('REFLEX 360', 4),
+                      _group('WIGGLE', 5),
                       const SizedBox(height: 14),
                       TextButton(
                         onPressed: () {
