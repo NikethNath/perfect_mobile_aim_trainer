@@ -26,6 +26,31 @@ flutter:
   uses-material-design: true
   assets:
     - assets/sounds/
+  fonts:
+    - family: ChakraPetch
+      fonts:
+        - asset: assets/fonts/ChakraPetch-Italic.ttf
+          style: italic
+        - asset: assets/fonts/ChakraPetch-SemiBoldItalic.ttf
+          style: italic
+          weight: 600
+        - asset: assets/fonts/ChakraPetch-BoldItalic.ttf
+          style: italic
+          weight: 700
+    - family: Rajdhani
+      fonts:
+        - asset: assets/fonts/Rajdhani-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Rajdhani-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Rajdhani-Bold.ttf
+          weight: 700
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/JetBrainsMono-ExtraBold.ttf
+          weight: 800
 
 flutter_launcher_icons:
   android: true

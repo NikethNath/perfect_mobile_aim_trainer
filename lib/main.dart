@@ -28,6 +28,252 @@ const List<Color> kTargetColors = [
   Color(0xFFF2F5F7), // white
 ];
 
+// ---------------------------------------------------------------------------
+// "Bold Esports" UI design system — chrome only (menus/HUD overlays). The
+// gameplay arena keeps its own player-customizable colors. Display type is
+// Chakra Petch italic, body is Rajdhani, numbers are JetBrains Mono (tabular).
+// ---------------------------------------------------------------------------
+const Color kUiBg = Color(0xFF08090E); // near-black chrome background
+const Color kMint = Color(0xFF23F5C0); // primary accent (click modes)
+const Color kCyan = Color(0xFF36E0FF); // secondary accent (tracking modes)
+const Color kMag = Color(0xFFFF2E83); // alert / "new best"
+const Color kUiText = Color(0xFFEAF6FF);
+const Color kUiDim = Color(0x80DCEBF5); // ~50% dim text
+const Color kOnAccent = Color(0xFF04130E); // text on a mint/cyan fill
+
+// `track` is an em factor (letter-spacing = size * track) so spacing scales
+// with the font size, matching the mockups.
+TextStyle uiDisplay(double size,
+        {Color color = kUiText,
+        double track = 0.04,
+        FontWeight weight = FontWeight.w700}) =>
+    TextStyle(
+        fontFamily: 'ChakraPetch',
+        fontStyle: FontStyle.italic,
+        fontSize: size,
+        color: color,
+        fontWeight: weight,
+        letterSpacing: size * track);
+
+TextStyle uiLabel(double size,
+        {Color color = kUiText,
+        double track = 0.14,
+        FontWeight weight = FontWeight.w600}) =>
+    TextStyle(
+        fontFamily: 'Rajdhani',
+        fontSize: size,
+        color: color,
+        fontWeight: weight,
+        letterSpacing: size * track);
+
+TextStyle uiMono(double size,
+        {Color color = kUiText, FontWeight weight = FontWeight.w700}) =>
+    TextStyle(
+        fontFamily: 'JetBrainsMono',
+        fontSize: size,
+        color: color,
+        fontWeight: weight,
+        fontFeatures: const [FontFeature.tabularFigures()]);
+
+/// Clips a rect into a slanted/cut-corner shape (the B "tech panel" look):
+/// the top edge starts [topLeft] px in, the bottom edge ends [bottomRight]
+/// px short. Equal values give a parallelogram; a lone bottomRight cuts one
+/// corner (used for cards).
+class _AngleClip extends CustomClipper<Path> {
+  const _AngleClip({this.topLeft = 0, this.bottomRight = 0});
+  final double topLeft;
+  final double bottomRight;
+  @override
+  Path getClip(Size s) => Path()
+    ..moveTo(topLeft, 0)
+    ..lineTo(s.width, 0)
+    ..lineTo(s.width - bottomRight, s.height)
+    ..lineTo(0, s.height)
+    ..close();
+  @override
+  bool shouldReclip(_AngleClip old) =>
+      old.topLeft != topLeft || old.bottomRight != bottomRight;
+}
+
+/// Tactile press feedback: a quick scale-down on tap. Wraps any tappable.
+class _Pressable extends StatefulWidget {
+  const _Pressable({required this.onTap, required this.child});
+  final VoidCallback onTap;
+  final Widget child;
+  @override
+  State<_Pressable> createState() => _PressableState();
+}
+
+class _PressableState extends State<_Pressable> {
+  double _s = 1;
+  void _set(double v) => setState(() => _s = v);
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => _set(0.95),
+      onTapUp: (_) {
+        _set(1);
+        widget.onTap();
+      },
+      onTapCancel: () => _set(1),
+      child: AnimatedScale(
+        scale: _s,
+        duration: const Duration(milliseconds: 90),
+        curve: Curves.easeOut,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// Filled, clipped, glowing CTA (PLAY / RETRY). Gradient mint→cyan by default.
+class _GradientButton extends StatelessWidget {
+  const _GradientButton({
+    required this.label,
+    required this.onTap,
+    this.width = 300,
+    this.height = 60,
+    this.fontSize = 20,
+  });
+  final String label;
+  final VoidCallback onTap;
+  final double width, height, fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Pressable(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(boxShadow: [
+          BoxShadow(
+              color: kMint.withValues(alpha: .42),
+              blurRadius: 30,
+              spreadRadius: -6),
+        ]),
+        child: ClipPath(
+          clipper: const _AngleClip(topLeft: 12, bottomRight: 12),
+          child: Container(
+            width: width,
+            height: height,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                  begin: Alignment(-1, -.3),
+                  end: Alignment(1, .3),
+                  colors: [kMint, kCyan]),
+            ),
+            child: Text(label.toUpperCase(),
+                style: uiDisplay(fontSize, color: kOnAccent, track: 0.28)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Outlined, clipped secondary button (MENU / back actions).
+class _GhostButton extends StatelessWidget {
+  const _GhostButton({
+    required this.label,
+    required this.onTap,
+    this.width = 200,
+  });
+  final String label;
+  final VoidCallback onTap;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Pressable(
+      onTap: onTap,
+      child: ClipPath(
+        clipper: const _AngleClip(topLeft: 10, bottomRight: 10),
+        child: Container(
+          width: width,
+          height: 52,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: kMint.withValues(alpha: .05),
+            border: Border.all(color: kMint.withValues(alpha: .32), width: 1.5),
+          ),
+          child: Text(label.toUpperCase(),
+              style: uiDisplay(16,
+                  color: kMint.withValues(alpha: .92), track: 0.2)),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small clipped category tag (CLICK / TRACK).
+class _Chip extends StatelessWidget {
+  const _Chip(this.label, {this.color = kMint});
+  final String label;
+  final Color color;
+  @override
+  Widget build(BuildContext context) {
+    return ClipPath(
+      clipper: const _AngleClip(topLeft: 5, bottomRight: 5),
+      child: Container(
+        color: color,
+        padding: const EdgeInsets.fromLTRB(9, 3, 9, 4),
+        child: Text(label,
+            style: uiLabel(11,
+                color: kOnAccent, track: 0.18, weight: FontWeight.w700)),
+      ),
+    );
+  }
+}
+
+/// Full-screen B backdrop: near-black with corner accent glows + scanlines.
+/// Wraps every chrome screen (not the gameplay arena).
+class _EsportsBackdrop extends StatelessWidget {
+  const _EsportsBackdrop({required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => Stack(fit: StackFit.expand, children: [
+        const Positioned.fill(
+            child: RepaintBoundary(child: CustomPaint(painter: _BackdropPainter()))),
+        child,
+      ]);
+}
+
+class _BackdropPainter extends CustomPainter {
+  const _BackdropPainter();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Rect r = Offset.zero & size;
+    canvas.drawRect(r, Paint()..color = kUiBg);
+    canvas.drawRect(
+        r,
+        Paint()
+          ..shader = RadialGradient(
+            center: const Alignment(1, -1),
+            radius: 1.15,
+            colors: [kCyan.withValues(alpha: .10), const Color(0x00000000)],
+            stops: const [0, .55],
+          ).createShader(r));
+    canvas.drawRect(
+        r,
+        Paint()
+          ..shader = RadialGradient(
+            center: const Alignment(-1, 1),
+            radius: 1.15,
+            colors: [kMag.withValues(alpha: .09), const Color(0x00000000)],
+            stops: const [0, .55],
+          ).createShader(r));
+    final Paint sl = Paint()
+      ..color = const Color(0xFFFFFFFF).withValues(alpha: .025)
+      ..strokeWidth = 1;
+    for (double y = 0; y < size.height; y += 3) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), sl);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_BackdropPainter old) => false;
+}
+
 // Gameplay tuning.
 const double kRoundSeconds = 60;
 const int kMaxTargets = 3;
@@ -83,11 +329,11 @@ class AimTrainerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        scaffoldBackgroundColor: kBg,
+        scaffoldBackgroundColor: kUiBg,
         colorScheme: const ColorScheme.dark(
-          primary: kFg,
-          secondary: kFg,
-          surface: kBg,
+          primary: kMint,
+          secondary: kCyan,
+          surface: kUiBg,
         ),
       ),
       home: const HomeFlow(),
@@ -120,6 +366,7 @@ const List<String> kScenarios = [
   'BARDPILL',
   'REFLEX 360',
   'WIGGLE',
+  'DYNAMIC',
 ];
 
 const List<String> kScenarioDesc = [
@@ -135,6 +382,8 @@ const List<String> kScenarioDesc = [
       'acceleration, zero easing. Reflex-heavy 360° tracking.',
   'Hold on a small head-height sphere jittering within a tiny area — slow '
       'micro-movements with constant direction changes. Precision tracking.',
+  'Click small cubes drifting around the far wall in 2D. Moving-target '
+      'clicking — read the path and tap.',
 ];
 
 // ---------------------------------------------------------------------------
@@ -196,6 +445,14 @@ const List<TuneParam> kTuneParams = [
   TuneParam(5, 'wg_accel', 'ACCELERATION', 1.0, 20.0, 9.0),
   TuneParam(5, 'wg_size', 'TARGET SIZE', 0.1, 0.6, 0.28),
   TuneParam(5, 'wg_dist', 'DISTANCE', 3.0, 10.0, 6.0),
+  // DYNAMIC — small cubes drifting in 2D across the far wall, click to pop.
+  // CUBE COUNT is a slider (rounded to a whole number when used).
+  TuneParam(6, 'dc_count', 'CUBE COUNT', 1.0, 8.0, 3.0),
+  TuneParam(6, 'dc_size', 'CUBE SIZE', 0.1, 1.0, 0.35),
+  TuneParam(6, 'dc_speed', 'SPEED', 0.0, 8.0, 2.5),
+  TuneParam(6, 'dc_accel', 'ACCELERATION', 0.5, 15.0, 4.0),
+  TuneParam(6, 'dc_chmin', 'CHANGE MIN (S)', 0.1, 3.0, 0.6),
+  TuneParam(6, 'dc_chrange', 'CHANGE SPREAD (S)', 0.0, 3.0, 0.9),
 ];
 
 final Map<String, double> kTuneDefaults = {
@@ -378,8 +635,8 @@ void drawFireButton(Canvas canvas, Offset c, double r, double op) {
 // lands on the same ~400 as a Celestial CUBES run. BARDPILL is a click mode
 // like CUBES, so it shares the 1.0 ladder. REFLEX 360 is full-auto tracking
 // like FLOAT/REACTIVE, so it shares the 1.43 scale. WIGGLE is also full-auto
-// tracking → 1.43. See kRanks.
-const List<double> kScoreScale = [1.0, 1.43, 1.43, 1.0, 1.43, 1.43];
+// tracking → 1.43. DYNAMIC is a click mode like CUBES → 1.0. See kRanks.
+const List<double> kScoreScale = [1.0, 1.43, 1.43, 1.0, 1.43, 1.43, 1.0];
 
 class RoundStats {
   int hits = 0;
@@ -730,8 +987,8 @@ class _HomeFlowState extends State<HomeFlow> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: switch (_screen) {
+    final bool isGame = _screen == _Screen.playing;
+    final Widget content = switch (_screen) {
         _Screen.menu => _MenuScreen(
             topRank: rankFor(_bests.values.fold(0, (a, b) => math.max(a, b))),
             onPlay: () => setState(() => _screen = _Screen.play),
@@ -805,7 +1062,20 @@ class _HomeFlowState extends State<HomeFlow> {
             onReplay: () => setState(() => _screen = _Screen.playing),
             onMenu: () => setState(() => _screen = _Screen.menu),
           ),
-      },
+      };
+    // The arena draws its own background; every chrome screen gets the B
+    // backdrop (corner glows + scanlines) and cross-fades between screens.
+    return Scaffold(
+      backgroundColor: isGame ? const Color(0xFF000000) : kUiBg,
+      body: isGame
+          ? content
+          : _EsportsBackdrop(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                switchInCurve: Curves.easeOut,
+                child: KeyedSubtree(key: ValueKey<_Screen>(_screen), child: content),
+              ),
+            ),
     );
   }
 }
@@ -817,10 +1087,14 @@ class _HomeFlowState extends State<HomeFlow> {
 class TargetCube {
   TargetCube(this.x, this.y, this.z, this.born);
 
-  final double x; // world-space center
-  final double y;
+  double x; // world-space center (mutable: DYNAMIC cubes drift across the wall)
+  double y;
   final double z;
   final double born; // game clock seconds at spawn
+  // DYNAMIC clicking motion state (left at 0 by the static modes).
+  double vx = 0, vy = 0; // current velocity in the wall plane
+  double tvx = 0, tvy = 0; // velocity the easing chases
+  double retargetT = 0; // time until the next heading change
 }
 
 class GameEngine extends ChangeNotifier {
@@ -853,7 +1127,11 @@ class GameEngine extends ChangeNotifier {
   double get pillHalfH => tv('re_height');
   double get pillYC => kRoomFloor + pillHalfH + pillR;
   // Static-target modes keep a fixed number of targets on the wall.
-  int get _targetCount => scenario == 3 ? kBardCount : kMaxTargets;
+  int get _targetCount => switch (scenario) {
+        3 => kBardCount,
+        6 => tv('dc_count').round().clamp(1, 8),
+        _ => kMaxTargets,
+      };
 
   // REACTIVE arena geometry, rebuilt from the tunable room size at setup.
   List<List<(double, double, double)>> reactiveWalls = const [];
@@ -982,7 +1260,8 @@ class GameEngine extends ChangeNotifier {
       // Pre-round: targets are already placed and visible, just frozen.
       // Spawn them already grown (born in the past) so they stay full-size
       // through the first shot instead of collapsing to a zero-size pop-in.
-      if ((scenario == 0 || scenario == 3) && arena != Size.zero) {
+      if ((scenario == 0 || scenario == 3 || scenario == 6) &&
+          arena != Size.zero) {
         while (targets.length < _targetCount) {
           final TargetCube c = _spawn();
           targets.add(TargetCube(c.x, c.y, c.z, -kGrowTime));
@@ -1001,6 +1280,8 @@ class GameEngine extends ChangeNotifier {
     } else if (scenario == 5) {
       _updateWiggle(dt);
     } else if (arena != Size.zero) {
+      // CUBES / BARDPILL / DYNAMIC: keep the wall stocked with N targets.
+      if (scenario == 6) _moveDynamic(dt);
       while (targets.length < _targetCount) {
         targets.add(_spawn());
       }
@@ -1132,6 +1413,49 @@ class GameEngine extends ChangeNotifier {
     }
   }
 
+  /// DYNAMIC clicking: drift every cube around the far wall in 2D. Each cube
+  /// eases toward a randomized heading, re-rolls it on a timer, and bounces off
+  /// the wall bounds. Speed/accel/size/cadence are all tunable (dc_*).
+  void _moveDynamic(double dt) {
+    final double sp = tv('dc_speed');
+    final double half = tv('dc_size');
+    final double k = math.min(1, dt * tv('dc_accel'));
+    final double xb = kRoomHalfW - 1.0 - half;
+    final double ylo = kRoomFloor + 0.8 + half;
+    final double yhi = kRoomCeil - 0.8 - half;
+    for (final TargetCube t in targets) {
+      t.retargetT -= dt;
+      if (t.retargetT <= 0) {
+        t.retargetT = tv('dc_chmin') + _rng.nextDouble() * tv('dc_chrange');
+        final double ang = _rng.nextDouble() * 2 * math.pi;
+        t.tvx = math.cos(ang) * sp;
+        t.tvy = math.sin(ang) * sp;
+      }
+      t.vx += (t.tvx - t.vx) * k;
+      t.vy += (t.tvy - t.vy) * k;
+      t.x += t.vx * dt;
+      t.y += t.vy * dt;
+      if (t.x > xb) {
+        t.x = xb;
+        t.tvx = -t.tvx.abs();
+        t.vx = -t.vx.abs();
+      } else if (t.x < -xb) {
+        t.x = -xb;
+        t.tvx = t.tvx.abs();
+        t.vx = t.vx.abs();
+      }
+      if (t.y > yhi) {
+        t.y = yhi;
+        t.tvy = -t.tvy.abs();
+        t.vy = -t.vy.abs();
+      } else if (t.y < ylo) {
+        t.y = ylo;
+        t.tvy = t.tvy.abs();
+        t.vy = t.vy.abs();
+      }
+    }
+  }
+
   void _updateReactive(double dt) {
     _rRetargetT -= dt;
     if (_rRetargetT <= 0) {
@@ -1191,17 +1515,20 @@ class GameEngine extends ChangeNotifier {
     return Curves.easeOutBack.transform((age / kGrowTime).clamp(0.0, 1.0));
   }
 
-  double halfOf(TargetCube t) => kCubeHalf * _grow(t); // CUBES half-extent
+  // CUBES uses a fixed half-extent; DYNAMIC's is tunable.
+  double halfOf(TargetCube t) =>
+      (scenario == 6 ? tv('dc_size') : kCubeHalf) * _grow(t);
   double bardRadiusOf(TargetCube t) => kBardR * _grow(t); // BARDPILL radius
 
-  /// Static targets spawn against the wall opposite the player. CUBES uses
-  /// big cubes; BARDPILL uses small, tightly-packed spheres.
+  /// Targets spawn against the wall opposite the player. CUBES uses big cubes,
+  /// BARDPILL small spheres, DYNAMIC small cubes that then drift in 2D.
   TargetCube _spawn() {
     final bool bard = scenario == 3;
-    final double half = bard ? kBardR : kCubeHalf;
+    final bool dyn = scenario == 6;
+    final double half = bard ? kBardR : (dyn ? tv('dc_size') : kCubeHalf);
     final double z = kRoomBack - half - 0.3;
-    final double sep = bard ? 1.5 : 2.2; // min center separation
-    final double xspan = kRoomHalfW - (bard ? 1.2 : 2.0);
+    final double sep = bard ? 1.5 : (dyn ? 1.4 : 2.2); // min center separation
+    final double xspan = kRoomHalfW - (bard ? 1.2 : (dyn ? 1.2 : 2.0));
     double x = 0, y = 1.5;
     for (int i = 0; i < 24; i++) {
       x = (_rng.nextDouble() * 2 - 1) * xspan;
@@ -1599,11 +1926,19 @@ class _GameScreenState extends State<GameScreen>
 
 /// TextPainter that only re-lays-out when its string changes.
 class _CachedText {
-  _CachedText(this.fontSize, {this.weight = FontWeight.w600, this.color = kFg});
+  _CachedText(this.fontSize,
+      {this.weight = FontWeight.w700,
+      this.color = kFg,
+      this.fontFamily,
+      this.italic = false,
+      this.track = 1.5});
 
   final double fontSize;
   final FontWeight weight;
   final Color color;
+  final String? fontFamily;
+  final bool italic;
+  final double track;
   String? _last;
   TextPainter? _tp;
 
@@ -1616,8 +1951,10 @@ class _CachedText {
             color: color,
             fontSize: fontSize,
             fontWeight: weight,
+            fontFamily: fontFamily,
+            fontStyle: italic ? FontStyle.italic : FontStyle.normal,
             fontFeatures: const [FontFeature.tabularFigures()],
-            letterSpacing: 1.5,
+            letterSpacing: track,
           ),
         ),
         textDirection: TextDirection.ltr,
@@ -1750,7 +2087,7 @@ class _GamePainter extends CustomPainter {
     // Fog depends only on distance to the eye, and the camera only rotates
     // (which preserves distance) — so corner colors are constant per round.
     _walls = switch (game.scenario) {
-      0 || 3 => _wallsCubes, // CUBES + BARDPILL share the far-wall room
+      0 || 3 || 6 => _wallsCubes, // CUBES + BARDPILL + DYNAMIC: far-wall room
       2 => game.reactiveWalls,
       _ => _wallsFloat,
     };
@@ -1801,14 +2138,27 @@ class _GamePainter extends CustomPainter {
   Color _fogColorFor(double d) =>
       Color.lerp(_fogNear, _fogFar, ((d - 2) / 14).clamp(0, 1))!;
 
-  late final _CachedText _scoreText =
-      _CachedText(20, color: settings.arenaAccent);
-  late final _CachedText _timeText =
-      _CachedText(20, color: settings.arenaAccent);
-  late final _CachedText _promptText =
-      _CachedText(20, color: settings.arenaAccent);
-  late final _CachedText _fpsText =
-      _CachedText(13, weight: FontWeight.w400, color: settings.arenaAccent);
+  late final _CachedText _scoreText = _CachedText(23,
+      weight: FontWeight.w800,
+      color: settings.arenaAccent,
+      fontFamily: 'JetBrainsMono',
+      track: 0.5);
+  late final _CachedText _timeText = _CachedText(23,
+      weight: FontWeight.w800,
+      color: settings.arenaAccent,
+      fontFamily: 'JetBrainsMono',
+      track: 0.5);
+  late final _CachedText _promptText = _CachedText(22,
+      weight: FontWeight.w700,
+      color: settings.arenaAccent,
+      fontFamily: 'ChakraPetch',
+      italic: true,
+      track: 4);
+  late final _CachedText _fpsText = _CachedText(13,
+      weight: FontWeight.w700,
+      color: settings.arenaAccent,
+      fontFamily: 'JetBrainsMono',
+      track: 0.5);
 
   /// Fog-shaded room surfaces. Near-plane clipped, then all walls batched into
   /// a single triangle-list draw call. Corner fog colors are precomputed (they
@@ -2037,7 +2387,7 @@ class _GamePainter extends CustomPainter {
     // The room edge lines.
     for (final (double ax, double ay, double az, double bx, double by,
         double bz) in (switch (game.scenario) {
-      0 || 3 => _roomCubes,
+      0 || 3 || 6 => _roomCubes,
       2 => game.reactiveRoom,
       _ => _roomFloat,
     })) {
@@ -2141,21 +2491,33 @@ class _GamePainter extends CustomPainter {
 // Static screens — zero animation, zero CPU while idle.
 // ---------------------------------------------------------------------------
 ButtonStyle _buttonStyle() => OutlinedButton.styleFrom(
-      foregroundColor: kFg,
-      side: const BorderSide(color: kFg, width: 2),
-      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
+      foregroundColor: kMint,
+      backgroundColor: kMint.withValues(alpha: .05),
+      side: BorderSide(color: kMint.withValues(alpha: .55), width: 1.5),
+      padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 15),
       textStyle: const TextStyle(
-        fontSize: 18,
+        fontFamily: 'ChakraPetch',
+        fontStyle: FontStyle.italic,
+        fontSize: 17,
         fontWeight: FontWeight.w700,
-        letterSpacing: 4,
+        letterSpacing: 3,
       ),
-      shape: const RoundedRectangleBorder(),
+      // Cut top-right / bottom-left for the B "tech panel" parallelogram look.
+      shape: const BeveledRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topRight: Radius.circular(12),
+          bottomLeft: Radius.circular(12),
+        ),
+      ),
     );
 
+// Body/label text for the chrome: Rajdhani, light on the dark backdrop. `size`
+// and `spacing` (logical px) keep the original call sites working.
 TextStyle _fgStyle(double size,
         {FontWeight weight = FontWeight.w600, double spacing = 2}) =>
     TextStyle(
-      color: kFg,
+      fontFamily: 'Rajdhani',
+      color: kUiText,
       fontSize: size,
       fontWeight: weight,
       letterSpacing: spacing,
@@ -2179,17 +2541,38 @@ class _MenuScreen extends StatelessWidget {
   final VoidCallback onRanks;
   final VoidCallback onSettings;
 
-  Widget _navButton(String label, VoidCallback onTap) => TextButton(
-        onPressed: onTap,
-        child: Text(label,
-            style: _fgStyle(13, weight: FontWeight.w500, spacing: 4)),
+  Widget _navButton(String label, VoidCallback onTap) => _Pressable(
+        onTap: onTap,
+        child: ClipPath(
+          clipper: const _AngleClip(topLeft: 7, bottomRight: 7),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
+            decoration: BoxDecoration(
+              color: kMint.withValues(alpha: .05),
+              border: Border.all(color: kMint.withValues(alpha: .22), width: 1),
+            ),
+            child: Text(label,
+                style: uiLabel(13,
+                    color: const Color(0xFFBFEFE4),
+                    track: 0.18,
+                    weight: FontWeight.w700)),
+          ),
+        ),
+      );
+
+  Widget _bar() => Container(
+        width: 30,
+        height: 3,
+        decoration: BoxDecoration(color: kMag, boxShadow: [
+          BoxShadow(color: kMag.withValues(alpha: .6), blurRadius: 8),
+        ]),
       );
 
   @override
   Widget build(BuildContext context) {
+    final Color rankColor = topRank?.color ?? kUiDim;
     // No horizontal inset: a cutout sits on one short edge, so insetting only
     // that side would push the centered menu off the display's true center.
-    // The menu is centred and narrow, so it never reaches the cutout anyway.
     return SafeArea(
       left: false,
       right: false,
@@ -2200,46 +2583,58 @@ class _MenuScreen extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox(height: 12),
-              const _Logo(size: 76),
-              const SizedBox(height: 16),
-              Text('AIM RANKED',
-                  style: _fgStyle(34, weight: FontWeight.w800, spacing: 10)),
               const SizedBox(height: 10),
+              const _Logo(size: 72, color: kMint, glow: true),
+              const SizedBox(height: 16),
+              ShaderMask(
+                shaderCallback: (r) => const LinearGradient(
+                  colors: [Color(0xFFEAFFF8), kMint, kCyan],
+                  stops: [0, .6, 1],
+                ).createShader(r),
+                child: Text('AIM RANKED',
+                    style: uiDisplay(50,
+                        color: const Color(0xFFFFFFFF), track: 0.06)),
+              ),
+              const SizedBox(height: 14),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  RankBadge(rank: topRank, size: 22),
-                  const SizedBox(width: 10),
+                  _bar(),
+                  const SizedBox(width: 14),
+                  if (topRank != null) ...[
+                    RankBadge(rank: topRank, size: 20),
+                    const SizedBox(width: 10),
+                  ],
                   Text(topRank?.name ?? 'UNRANKED',
-                      style: TextStyle(
-                        color: topRank?.color ?? kFg.withValues(alpha: .55),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 4,
-                      )),
+                      style: uiLabel(15,
+                          color: rankColor,
+                          track: 0.4,
+                          weight: FontWeight.w700)),
+                  const SizedBox(width: 14),
+                  _bar(),
                 ],
               ),
-              const SizedBox(height: 26),
-              SizedBox(
-                width: 240,
-                child: OutlinedButton(
-                  style: _buttonStyle(),
-                  onPressed: onPlay,
-                  child: const Text('PLAY'),
-                ),
-              ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 28),
+              _GradientButton(
+                  label: 'PLAY',
+                  onTap: onPlay,
+                  width: 330,
+                  height: 64,
+                  fontSize: 22),
+              const SizedBox(height: 22),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _navButton('PROFILE', onProfile),
+                  const SizedBox(width: 10),
                   _navButton('RANKS', onRanks),
+                  const SizedBox(width: 10),
                   _navButton('TUNING', onTuning),
+                  const SizedBox(width: 10),
                   _navButton('SETTINGS', onSettings),
                 ],
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
             ],
           ),
         ),
@@ -2290,50 +2685,77 @@ class _PlayScreen extends StatelessWidget {
     );
   }
 
+  // Click modes (CUBES / BARDPILL / DYNAMIC) are mint; tracking modes cyan.
+  static bool _isClick(int i) => i == 0 || i == 3 || i == 6;
+
   Widget _card(int i) {
     final int best = bests[i] ?? 0;
     final Rank? rank = rankFor(best);
+    final bool click = _isClick(i);
+    final Color accent = click ? kMint : kCyan;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 7),
-      child: GestureDetector(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+      child: _Pressable(
         onTap: () => onPick(i),
-        child: Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            border: Border.all(color: kFg.withValues(alpha: .3)),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(kScenarios[i], style: _fgStyle(20, spacing: 5)),
-                    const SizedBox(height: 6),
-                    Text(
-                      kScenarioDesc[i],
-                      style: TextStyle(
-                        color: kFg.withValues(alpha: .7),
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        RankBadge(rank: rank, size: 20),
-                        const SizedBox(width: 8),
-                        Text('BEST $best',
-                            style:
-                                _fgStyle(12, weight: FontWeight.w400, spacing: 2)),
-                      ],
-                    ),
-                  ],
-                ),
+        child: ClipPath(
+          clipper: const _AngleClip(bottomRight: 18),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(20, 16, 24, 16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  accent.withValues(alpha: .09),
+                  accent.withValues(alpha: .02),
+                ],
               ),
-              const SizedBox(width: 12),
-              Icon(Icons.play_arrow, color: kFg, size: 34),
-            ],
+              border: Border(left: BorderSide(color: accent, width: 3)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(kScenarios[i],
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: uiDisplay(22, track: 0.05)),
+                          ),
+                          const SizedBox(width: 12),
+                          _Chip(click ? 'CLICK' : 'TRACK', color: accent),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        kScenarioDesc[i],
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: uiLabel(13,
+                            color: kUiDim, track: 0.0, weight: FontWeight.w500),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          RankBadge(rank: rank, size: 20),
+                          const SizedBox(width: 10),
+                          Text('$best', style: uiMono(15)),
+                          const SizedBox(width: 6),
+                          Text('BEST',
+                              style: uiLabel(11, color: kUiDim, track: 0.22)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Icon(Icons.play_arrow, color: accent, size: 34),
+              ],
+            ),
           ),
         ),
       ),
@@ -2429,6 +2851,7 @@ class _TuningScreenState extends State<_TuningScreen> {
                       _group('REACTIVE', 2),
                       _group('REFLEX 360', 4),
                       _group('WIGGLE', 5),
+                      _group('DYNAMIC', 6),
                       const SizedBox(height: 14),
                       TextButton(
                         onPressed: () {
@@ -2549,10 +2972,12 @@ Widget _settingsHeader(String title, VoidCallback onBack) {
     children: [
       IconButton(
         onPressed: onBack,
-        icon: const Icon(Icons.chevron_left, color: kFg, size: 30),
+        icon: const Icon(Icons.chevron_left, color: kMint, size: 32),
       ),
       Expanded(
-        child: Center(child: Text(title, style: _fgStyle(18, spacing: 6))),
+        child: Center(
+            child: Text(title,
+                style: uiDisplay(19, track: 0.22))),
       ),
       const SizedBox(width: 46), // balance the back button
     ],
@@ -3073,6 +3498,7 @@ class _ResultsScreen extends StatelessWidget {
     final bool isBest = stats.score >= best && stats.score > 0;
     final Rank? rank = rankFor(stats.score);
     final Rank? next = nextRankFor(stats.score);
+    final Color rankColor = rank?.color ?? kUiDim;
     return SafeArea(
       child: Center(
         child: FittedBox(
@@ -3080,62 +3506,107 @@ class _ResultsScreen extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox(height: 20),
-              Text(isBest ? 'NEW BEST' : 'ROUND OVER',
-                  style: _fgStyle(18, spacing: 6)),
-              const SizedBox(height: 12),
+              const SizedBox(height: 18),
+              if (isBest)
+                ClipPath(
+                  clipper: const _AngleClip(topLeft: 8, bottomRight: 8),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(16, 7, 16, 8),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                          colors: [Color(0xFFFFC83D), Color(0xFFFF8A3D)]),
+                    ),
+                    child: Text('★ NEW BEST',
+                        style: uiDisplay(15,
+                            color: const Color(0xFF1A0C12), track: 0.16)),
+                  ),
+                )
+              else
+                Text('ROUND OVER',
+                    style: uiDisplay(18, color: kUiDim, track: 0.2)),
+              const SizedBox(height: 18),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  RankBadge(rank: rank, size: 64),
-                  const SizedBox(width: 20),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('${stats.score}',
-                          style: _fgStyle(54, weight: FontWeight.w800)),
-                      Text(
-                        rank?.name ?? 'UNRANKED',
-                        style: TextStyle(
-                          color: rank?.color ?? kFg.withValues(alpha: .5),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 5,
+                      ShaderMask(
+                        shaderCallback: (r) => const LinearGradient(
+                          colors: [Color(0xFFFFFFFF), kMint, kCyan],
+                          stops: [0, .55, 1],
+                        ).createShader(r),
+                        child: TweenAnimationBuilder<double>(
+                          tween:
+                              Tween(begin: 0, end: stats.score.toDouble()),
+                          duration: const Duration(milliseconds: 650),
+                          curve: Curves.easeOutCubic,
+                          builder: (c, v, _) => Text('${v.round()}',
+                              style: uiMono(96,
+                                  color: const Color(0xFFFFFFFF),
+                                  weight: FontWeight.w800)),
                         ),
                       ),
+                      Text('SCORE', style: uiLabel(13, color: kUiDim, track: 0.5)),
                     ],
+                  ),
+                  const SizedBox(width: 34),
+                  // Existing per-rank badge art, kept as-is — revealed with a
+                  // scale-in pop.
+                  TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0, end: 1),
+                    duration: const Duration(milliseconds: 520),
+                    curve: Curves.easeOutBack,
+                    builder: (c, t, child) => Opacity(
+                      opacity: t.clamp(0.0, 1.0),
+                      child: Transform.scale(scale: 0.7 + 0.3 * t, child: child),
+                    ),
+                    child: Column(
+                      children: [
+                        RankBadge(rank: rank, size: 92),
+                        const SizedBox(height: 8),
+                        Text(rank?.name ?? 'UNRANKED',
+                            style: uiLabel(16,
+                                color: rankColor,
+                                track: 0.28,
+                                weight: FontWeight.w700)),
+                      ],
+                    ),
                   ),
                 ],
               ),
               if (next != null) ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 Text('NEXT: ${next.name} AT ${next.threshold}',
-                    style: _fgStyle(12, weight: FontWeight.w400, spacing: 3)),
+                    style: uiLabel(12, color: kUiDim, track: 0.22)),
               ],
-              const SizedBox(height: 20),
-              _statRow('HITS', '${stats.hits}'),
-              _statRow('MISSES', '${stats.misses}'),
-              _statRow(
-                  'ACCURACY', '${(stats.accuracy * 100).toStringAsFixed(0)}%'),
-              _statRow('AVG KILL', '${stats.avgKillMs.toStringAsFixed(0)} MS'),
+              const SizedBox(height: 22),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _statTile('HITS', '${stats.hits}', kUiText),
+                  const SizedBox(width: 12),
+                  _statTile('ACCURACY',
+                      '${(stats.accuracy * 100).toStringAsFixed(0)}%', kCyan),
+                  const SizedBox(width: 12),
+                  _statTile('AVG MS', stats.avgKillMs.toStringAsFixed(0), kMag),
+                ],
+              ),
               const SizedBox(height: 24),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  OutlinedButton(
-                    style: _buttonStyle(),
-                    onPressed: onReplay,
-                    child: const Text('AGAIN'),
-                  ),
-                  const SizedBox(width: 20),
-                  OutlinedButton(
-                    style: _buttonStyle(),
-                    onPressed: onMenu,
-                    child: const Text('MENU'),
-                  ),
+                  _GhostButton(label: 'MENU', onTap: onMenu, width: 170),
+                  const SizedBox(width: 16),
+                  _GradientButton(
+                      label: 'RETRY',
+                      onTap: onReplay,
+                      width: 200,
+                      height: 56,
+                      fontSize: 18),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
             ],
           ),
         ),
@@ -3143,16 +3614,21 @@ class _ResultsScreen extends StatelessWidget {
     );
   }
 
-  Widget _statRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: SizedBox(
-        width: 260,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  Widget _statTile(String label, String value, Color color) {
+    return ClipPath(
+      clipper: const _AngleClip(topLeft: 6, bottomRight: 6),
+      child: Container(
+        width: 150,
+        padding: const EdgeInsets.symmetric(vertical: 13),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .06),
+          border: Border(top: BorderSide(color: color, width: 2)),
+        ),
+        child: Column(
           children: [
-            Text(label, style: _fgStyle(14, weight: FontWeight.w400)),
-            Text(value, style: _fgStyle(14)),
+            Text(value, style: uiMono(24, color: color)),
+            const SizedBox(height: 5),
+            Text(label, style: uiLabel(11, color: kUiDim, track: 0.24)),
           ],
         ),
       ),
@@ -3345,35 +3821,54 @@ class _ProfileScreen extends StatelessWidget {
 /// Aim Ranked mark: a reticle ring with four ticks and a rank chevron at the
 /// center — "aim" (reticle) meeting "ranked" (the upward chevron).
 class _Logo extends StatelessWidget {
-  const _Logo({required this.size});
+  const _Logo({required this.size, this.color = kFg, this.glow = false});
 
   final double size;
+  final Color color;
+  final bool glow;
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(size: Size.square(size), painter: _LogoPainter());
+    return CustomPaint(
+        size: Size.square(size), painter: _LogoPainter(color, glow));
   }
 }
 
 class _LogoPainter extends CustomPainter {
-  static final Paint _stroke = Paint()
-    ..color = kFg
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 3
-    ..strokeCap = StrokeCap.round
-    ..strokeJoin = StrokeJoin.round;
-  static final Paint _fill = Paint()..color = kFg;
+  _LogoPainter(this.color, this.glow);
+  final Color color;
+  final bool glow;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final Paint stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final Paint fill = Paint()..color = color;
+    if (glow) {
+      // Soft outer glow: same shapes, blurred, drawn underneath.
+      final Paint g = Paint()
+        ..color = color.withValues(alpha: .55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+      _draw(canvas, size, g, g);
+    }
+    _draw(canvas, size, stroke, fill);
+  }
+
+  void _draw(Canvas canvas, Size size, Paint stroke, Paint fill) {
     final Offset c = size.center(Offset.zero);
     final double r = size.shortestSide / 2 - 2;
     // Reticle ring.
-    canvas.drawCircle(c, r * 0.82, _stroke);
+    canvas.drawCircle(c, r * 0.82, stroke);
     // Four ticks, gapped from the ring inward.
     for (final double a in [0, math.pi / 2, math.pi, 3 * math.pi / 2]) {
       final Offset dir = Offset(math.cos(a), math.sin(a));
-      canvas.drawLine(c + dir * (r * 0.82), c + dir * r, _stroke);
+      canvas.drawLine(c + dir * (r * 0.82), c + dir * r, stroke);
     }
     // Centered rank chevron (points up).
     final double w = r * 0.42, h = r * 0.30;
@@ -3381,11 +3876,12 @@ class _LogoPainter extends CustomPainter {
       ..moveTo(c.dx - w, c.dy + h * 0.6)
       ..lineTo(c.dx, c.dy - h)
       ..lineTo(c.dx + w, c.dy + h * 0.6);
-    canvas.drawPath(chevron, _stroke);
+    canvas.drawPath(chevron, stroke);
     // Small dot beneath, completing the reticle center.
-    canvas.drawCircle(c + Offset(0, r * 0.42), r * 0.07, _fill);
+    canvas.drawCircle(c + Offset(0, r * 0.42), r * 0.07, fill);
   }
 
   @override
-  bool shouldRepaint(_LogoPainter oldDelegate) => false;
+  bool shouldRepaint(_LogoPainter old) =>
+      old.color != color || old.glow != glow;
 }

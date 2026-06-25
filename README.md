@@ -27,6 +27,7 @@ First-person, FPS-style controls, landscape-locked:
 | **BARDPILL** | click | Pop four small static spheres on a single wall (KovaaK "1w4ts" style). Precise one-shot clicking and fast switching. |
 | **REFLEX 360** | track | Track a sphere that snaps to new headings instantly — infinite acceleration, zero easing. Reflex-heavy 360° tracking. Hold FIRE for full-auto. |
 | **WIGGLE** | track | Hold on a small head-height sphere jittering within a tiny 2D area — slow, head-like micro-movements with constant direction changes. Precision tracking. Hold FIRE for full-auto. |
+| **DYNAMIC** | click | Click small cubes drifting around the far wall in 2D (moving-target clicking). Read the path and tap. |
 
 ### Scoring & ranks
 
@@ -102,9 +103,10 @@ Run checks with `flutter analyze && flutter test`.
 - Gameplay constants live at the top of [lib/main.dart](lib/main.dart): round
   length, target counts/sizes, scoring scales, the rank ladder (`kRanks`), and
   the two default palette colors (`kBg` / `kFg`).
-- Per-scenario bot behavior (FLOAT 360, REACTIVE, REFLEX 360, WIGGLE) is
-  described by `kTuneParams`. The in-app **TUNING** menu (from the main menu)
+- Per-scenario bot behavior (FLOAT 360, REACTIVE, REFLEX 360, WIGGLE, DYNAMIC)
+  is described by `kTuneParams`. The in-app **TUNING** menu (from the main menu)
   adjusts these live and persists them; the `kTuneParams` values are the
   defaults. Note REFLEX 360 has no acceleration slider — it runs at infinite
-  acceleration by design.
+  acceleration by design. DYNAMIC's CUBE COUNT slider is rounded to a whole
+  number when used.
   
