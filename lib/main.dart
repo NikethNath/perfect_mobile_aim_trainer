@@ -1681,7 +1681,10 @@ class GameEngine extends ChangeNotifier {
 // rapid hits overlap. Fire-and-forget; errors swallowed. Hit=glass, miss=deeppop.
 // ---------------------------------------------------------------------------
 class SoundFx {
-  static const String hitAsset = 'sounds/dragon-studio-pop-402323.mp3';
+  // Hit is a trimmed WAV: the source mp3 had ~90ms of quiet swell before the
+  // transient plus mp3 decoder priming, which made hits feel late. WAV has no
+  // decoder priming and the clip is cut to the punch (4ms fade-in, no click).
+  static const String hitAsset = 'sounds/dragon-studio-hit.wav';
   static const String missAsset = 'sounds/u_8e8ungop1x-pop-268648.mp3';
 
   final List<AudioPlayer> _hit = [];
