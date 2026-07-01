@@ -404,50 +404,50 @@ class TuneParam {
 
 const List<TuneParam> kTuneParams = [
   // FLOAT 360
-  TuneParam(1, 'fl_orbit', 'ORBIT SPEED', 0.5, 4.0, 1.6),
+  TuneParam(1, 'fl_orbit', 'ORBIT SPEED', 0.5, 4.0, 1.4),
   TuneParam(1, 'fl_vert', 'VERTICAL SPEED', 0.0, 1.5, 0.65),
   TuneParam(1, 'fl_depth', 'DEPTH SPEED', 0.0, 4.0, 2.6),
   TuneParam(1, 'fl_chmin', 'CHANGE MIN (S)', 0.1, 2.0, 0.15),
   TuneParam(1, 'fl_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.65),
   TuneParam(1, 'fl_accel', 'ACCELERATION', 0.5, 10.0, 4.3),
   TuneParam(1, 'fl_size', 'TARGET SIZE', 0.1, 0.7, 0.33),
-  TuneParam(1, 'fl_distmin', 'MIN DISTANCE', 2.0, 8.0, 4.7),
-  TuneParam(1, 'fl_distmax', 'MAX DISTANCE', 2.0, 8.0, 7.1),
+  TuneParam(1, 'fl_distmin', 'MIN DISTANCE', 2.0, 8.0, 6.0),
+  TuneParam(1, 'fl_distmax', 'MAX DISTANCE', 2.0, 8.0, 6.0),
   // REACTIVE
   TuneParam(2, 're_strafe', 'STRAFE SPEED', 1.0, 12.0, 8.6),
   TuneParam(2, 're_depth', 'DEPTH SPEED', 0.0, 8.0, 6.4),
-  TuneParam(2, 're_chmin', 'CHANGE MIN (S)', 0.05, 1.5, 0.15),
+  TuneParam(2, 're_chmin', 'CHANGE MIN (S)', 0.05, 1.5, 0.22),
   TuneParam(2, 're_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.35),
   TuneParam(2, 're_accel', 'ACCELERATION', 1.0, 15.0, 6.9),
   TuneParam(2, 're_size', 'TARGET RADIUS', 0.1, 0.6, 0.4),
-  TuneParam(2, 're_height', 'TARGET HEIGHT', 0.4, 2.5, 1.26),
+  TuneParam(2, 're_height', 'TARGET HEIGHT', 0.4, 2.5, 1.25),
   TuneParam(2, 're_room', 'ROOM SIZE', 6.0, 24.0, 14.0),
   TuneParam(2, 're_distmin', 'MIN DISTANCE', 2.0, 14.0, 4.0),
   TuneParam(2, 're_distmax', 'MAX DISTANCE', 2.0, 18.0, 9.0),
   // REFLEX 360 — FLOAT's orbit model but with infinite acceleration (no accel
   // param: velocity snaps instantly). Target size defaults 10% above FLOAT's
   // 0.33. Snappier change cadence makes it juke more often.
-  TuneParam(4, 'rx_orbit', 'ORBIT SPEED', 0.5, 5.0, 2.2),
-  TuneParam(4, 'rx_vert', 'VERTICAL SPEED', 0.0, 1.5, 0.8),
-  TuneParam(4, 'rx_depth', 'DEPTH SPEED', 0.0, 4.0, 2.6),
-  TuneParam(4, 'rx_chmin', 'CHANGE MIN (S)', 0.05, 2.0, 0.12),
-  TuneParam(4, 'rx_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.35),
-  TuneParam(4, 'rx_size', 'TARGET SIZE', 0.1, 0.7, 0.363),
-  TuneParam(4, 'rx_distmin', 'MIN DISTANCE', 2.0, 8.0, 4.7),
-  TuneParam(4, 'rx_distmax', 'MAX DISTANCE', 2.0, 8.0, 7.1),
+  TuneParam(4, 'rx_orbit', 'ORBIT SPEED', 0.5, 5.0, 0.7),
+  TuneParam(4, 'rx_vert', 'VERTICAL SPEED', 0.0, 1.5, 0.52),
+  TuneParam(4, 'rx_depth', 'DEPTH SPEED', 0.0, 4.0, 1.4),
+  TuneParam(4, 'rx_chmin', 'CHANGE MIN (S)', 0.05, 2.0, 0.36),
+  TuneParam(4, 'rx_chrange', 'CHANGE SPREAD (S)', 0.0, 2.0, 0.22),
+  TuneParam(4, 'rx_size', 'TARGET SIZE', 0.1, 0.7, 0.35),
+  TuneParam(4, 'rx_distmin', 'MIN DISTANCE', 2.0, 8.0, 7.0),
+  TuneParam(4, 'rx_distmax', 'MAX DISTANCE', 2.0, 8.0, 7.0),
   // WIGGLE — a small sphere that jitters within a tiny 2D area at a fixed
   // distance (head-height), both axes wiggling independently. All sizing and
   // movement values are tunable here.
-  TuneParam(5, 'wg_speed', 'SPEED', 0.1, 4.0, 0.8),
-  TuneParam(5, 'wg_amp', 'RANGE', 0.1, 3.0, 0.6),
-  TuneParam(5, 'wg_chmin', 'CHANGE MIN (S)', 0.05, 1.0, 0.12),
-  TuneParam(5, 'wg_chrange', 'CHANGE SPREAD (S)', 0.0, 1.0, 0.18),
-  TuneParam(5, 'wg_accel', 'ACCELERATION', 1.0, 20.0, 9.0),
-  TuneParam(5, 'wg_size', 'TARGET SIZE', 0.1, 0.6, 0.28),
+  TuneParam(5, 'wg_speed', 'SPEED', 0.1, 4.0, 1.0),
+  TuneParam(5, 'wg_amp', 'RANGE', 0.1, 3.0, 1.02),
+  TuneParam(5, 'wg_chmin', 'CHANGE MIN (S)', 0.05, 1.0, 0.3),
+  TuneParam(5, 'wg_chrange', 'CHANGE SPREAD (S)', 0.0, 1.0, 0.33),
+  TuneParam(5, 'wg_accel', 'ACCELERATION', 1.0, 20.0, 7.0),
+  TuneParam(5, 'wg_size', 'TARGET SIZE', 0.1, 0.6, 0.17),
   TuneParam(5, 'wg_dist', 'DISTANCE', 3.0, 10.0, 6.0),
   // DYNAMIC — small cubes drifting in 2D across the far wall, click to pop.
   // CUBE COUNT is a slider (rounded to a whole number when used).
-  TuneParam(6, 'dc_count', 'CUBE COUNT', 1.0, 8.0, 3.0),
+  TuneParam(6, 'dc_count', 'CUBE COUNT', 1.0, 8.0, 4.0),
   TuneParam(6, 'dc_size', 'CUBE SIZE', 0.1, 1.0, 0.35),
   TuneParam(6, 'dc_speed', 'SPEED', 0.0, 8.0, 2.5),
   TuneParam(6, 'dc_accel', 'ACCELERATION', 0.5, 15.0, 4.0),
@@ -458,6 +458,17 @@ const List<TuneParam> kTuneParams = [
 final Map<String, double> kTuneDefaults = {
   for (final TuneParam p in kTuneParams) p.key: p.def
 };
+
+/// A scenario's score only counts toward rank/best when its bot tuning is left
+/// at the defaults. Modes with no tunable params (CUBES, BARDPILL) are always
+/// ranked, since the loop finds nothing to compare.
+bool tuningIsDefault(int scenario, Map<String, double> tune) {
+  for (final TuneParam p in kTuneParams) {
+    if (p.scenario != scenario) continue;
+    if (((tune[p.key] ?? p.def) - p.def).abs() > 1e-6) return false;
+  }
+  return true;
+}
 
 const List<Color> kBorderColors = [Color(0xFF000000), ...kTargetColors];
 
@@ -498,6 +509,8 @@ class AppSettings {
   double fireOpacity = 1.0;
 
   bool showFps = false;
+  double volume = 1.0; // master SFX volume, 0..1
+  int fpsLimit = 0; // frame cap in Hz; 0 = uncapped (native refresh)
 
   // Live bot-tuning values, keyed by TuneParam.key.
   final Map<String, double> tune = Map<String, double>.from(kTuneDefaults);
@@ -527,6 +540,8 @@ class AppSettings {
     fireScale = prefs.getDouble('fire_scale') ?? 1.0;
     fireOpacity = prefs.getDouble('fire_opacity') ?? 1.0;
     showFps = prefs.getBool('show_fps') ?? false;
+    volume = prefs.getDouble('volume') ?? 1.0;
+    fpsLimit = prefs.getInt('fps_limit') ?? 0;
     for (final TuneParam p in kTuneParams) {
       tune[p.key] = prefs.getDouble('tune_${p.key}') ?? p.def;
     }
@@ -552,6 +567,8 @@ class AppSettings {
     await prefs.setDouble('fire_scale', fireScale);
     await prefs.setDouble('fire_opacity', fireOpacity);
     await prefs.setBool('show_fps', showFps);
+    await prefs.setDouble('volume', volume);
+    await prefs.setInt('fps_limit', fpsLimit);
     for (final TuneParam p in kTuneParams) {
       await prefs.setDouble('tune_${p.key}', tv(p.key));
     }
@@ -946,6 +963,7 @@ class _HomeFlowState extends State<HomeFlow> {
   final AppSettings _settings = AppSettings();
   _Screen _screen = _Screen.menu;
   RoundStats? _last;
+  bool _lastRanked = true; // did the finished round count toward rank/best?
   final Map<int, int> _bests = {}; // best score per scenario index
   int _scenario = 0;
   int _round = 0; // bumped to force a fresh GameScreen on restart
@@ -974,13 +992,15 @@ class _HomeFlowState extends State<HomeFlow> {
   }
 
   void _onRoundFinished(RoundStats stats) {
-    if (stats.score > _best) {
+    final bool ranked = tuningIsDefault(_scenario, _settings.tune);
+    if (ranked && stats.score > _best) {
       _bests[_scenario] = stats.score;
       SharedPreferences.getInstance().then(
           (prefs) => saveSignedBest(prefs, kScenarios[_scenario], stats.score));
     }
     setState(() {
       _last = stats;
+      _lastRanked = ranked;
       _screen = _Screen.results;
     });
   }
@@ -1059,6 +1079,7 @@ class _HomeFlowState extends State<HomeFlow> {
         _Screen.results => _ResultsScreen(
             stats: _last!,
             best: _best,
+            ranked: _lastRanked,
             onReplay: () => setState(() => _screen = _Screen.playing),
             onMenu: () => setState(() => _screen = _Screen.menu),
           ),
@@ -1670,9 +1691,11 @@ class SoundFx {
   bool ready = false;
 
   // Hits should punch through; misses stay subtle so spammed full-auto misses
-  // don't drown out the hit feedback.
+  // don't drown out the hit feedback. These are the base mix; `master` (the
+  // user's SFX-volume setting, 0..1) scales both. Set master before init().
   static const double hitVolume = 1.0;
   static const double missVolume = 0.3;
+  double master = 1.0;
 
   Future<void> init() async {
     // Build each player independently so one failure can't silence the whole
@@ -1698,7 +1721,7 @@ class SoundFx {
       final AudioPlayer p = AudioPlayer();
       await p.setReleaseMode(ReleaseMode.stop);
       await p.setPlayerMode(PlayerMode.mediaPlayer);
-      await p.setVolume(volume);
+      await p.setVolume((volume * master).clamp(0.0, 1.0));
       await p.setSource(AssetSource(asset)); // decode/prepare once
       return p;
     } catch (_) {
@@ -1770,6 +1793,7 @@ class _GameScreenState extends State<GameScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _sfx.master = widget.settings.volume;
     _sfx.init();
     _game = GameEngine(onFinished: widget.onFinished)
       ..scenario = widget.scenario
@@ -1801,6 +1825,13 @@ class _GameScreenState extends State<GameScreen>
   void _tick(Duration elapsed) {
     final double dt =
         (elapsed - _prev).inMicroseconds / Duration.microsecondsPerSecond;
+    // Optional FPS cap: let vsync keep ticking but skip processing until the
+    // target frame interval has elapsed (0 = uncapped/native refresh). The
+    // small epsilon stops a cap that matches the panel — e.g. 60 on 60Hz —
+    // from landing just short and halving to 30. `_prev` only advances on the
+    // frames we actually render, so dt stays true wall-time for the physics.
+    final int limit = widget.settings.fpsLimit;
+    if (limit > 0 && dt < 1.0 / limit - 0.0005) return;
     _prev = elapsed;
     if (dt > 0 && dt < 0.5) {
       _game.fps += (1 / dt - _game.fps) * 0.1;
@@ -2847,6 +2878,15 @@ class _TuningScreenState extends State<_TuningScreen> {
                   constraints: const BoxConstraints(maxWidth: 520),
                   child: Column(
                     children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                        child: Text(
+                          'Scores only count toward your rank at default '
+                          'values. Custom tuning is for practice.',
+                          textAlign: TextAlign.center,
+                          style: uiLabel(12, color: kMag, track: 0.14),
+                        ),
+                      ),
                       _group('FLOAT 360', 1),
                       _group('REACTIVE', 2),
                       _group('REFLEX 360', 4),
@@ -3260,7 +3300,52 @@ class _GeneralSettingsScreen extends StatelessWidget {
                         s.fov = v;
                         onChanged();
                       }),
-                      const SizedBox(height: 16),
+                      _settingsSliderRow(
+                          'SFX VOLUME', '${(s.volume * 100).round()}%'),
+                      _settingsSlider(s.volume, 0.0, 1.0, (v) {
+                        s.volume = v;
+                        onChanged();
+                      }),
+                      const SizedBox(height: 20),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: _settingsLabel('FPS LIMIT'),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            for (final int hz in const [0, 60, 90, 120, 144, 240])
+                              GestureDetector(
+                                onTap: () {
+                                  s.fpsLimit = hz;
+                                  onChanged();
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: s.fpsLimit == hz
+                                          ? kFg
+                                          : kFg.withValues(alpha: .35),
+                                      width: s.fpsLimit == hz ? 2 : 1,
+                                    ),
+                                  ),
+                                  child: Text(hz == 0 ? 'OFF' : '$hz',
+                                      style: _fgStyle(13)),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24),
                         child: Row(
@@ -3484,18 +3569,20 @@ class _ResultsScreen extends StatelessWidget {
   const _ResultsScreen({
     required this.stats,
     required this.best,
+    required this.ranked,
     required this.onReplay,
     required this.onMenu,
   });
 
   final RoundStats stats;
   final int best;
+  final bool ranked;
   final VoidCallback onReplay;
   final VoidCallback onMenu;
 
   @override
   Widget build(BuildContext context) {
-    final bool isBest = stats.score >= best && stats.score > 0;
+    final bool isBest = ranked && stats.score >= best && stats.score > 0;
     final Rank? rank = rankFor(stats.score);
     final Rank? next = nextRankFor(stats.score);
     final Color rankColor = rank?.color ?? kUiDim;
@@ -3519,6 +3606,19 @@ class _ResultsScreen extends StatelessWidget {
                     child: Text('★ NEW BEST',
                         style: uiDisplay(15,
                             color: const Color(0xFF1A0C12), track: 0.16)),
+                  ),
+                )
+              else if (!ranked)
+                ClipPath(
+                  clipper: const _AngleClip(topLeft: 8, bottomRight: 8),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(16, 7, 16, 8),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: kMag, width: 1.4),
+                      color: kMag.withValues(alpha: 0.12),
+                    ),
+                    child: Text('⚠ CUSTOM TUNING · NOT RANKED',
+                        style: uiDisplay(14, color: kMag, track: 0.16)),
                   ),
                 )
               else
@@ -3575,7 +3675,11 @@ class _ResultsScreen extends StatelessWidget {
                   ),
                 ],
               ),
-              if (next != null) ...[
+              if (!ranked) ...[
+                const SizedBox(height: 10),
+                Text('RESET TUNING TO DEFAULT TO RANK THIS MODE',
+                    style: uiLabel(12, color: kMag, track: 0.22)),
+              ] else if (next != null) ...[
                 const SizedBox(height: 10),
                 Text('NEXT: ${next.name} AT ${next.threshold}',
                     style: uiLabel(12, color: kUiDim, track: 0.22)),

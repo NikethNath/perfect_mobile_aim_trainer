@@ -41,4 +41,18 @@ void main() {
     expect(kScenarioDesc.length, kScenarios.length);
     expect(kScoreScale.length, kScenarios.length);
   });
+
+  test('tuningIsDefault gates on the scenario defaults', () {
+    // A fresh copy of the defaults ranks for every scenario, including the
+    // modes that expose no tunable params (CUBES, BARDPILL).
+    final Map<String, double> tune = Map<String, double>.from(kTuneDefaults);
+    for (int s = 0; s < kScenarios.length; s++) {
+      expect(tuningIsDefault(s, tune), isTrue);
+    }
+
+    // Nudging one FLOAT (scenario 1) param off default un-ranks only FLOAT.
+    tune['fl_orbit'] = kTuneDefaults['fl_orbit']! + 0.5;
+    expect(tuningIsDefault(1, tune), isFalse);
+    expect(tuningIsDefault(2, tune), isTrue); // REACTIVE untouched
+  });
 }
