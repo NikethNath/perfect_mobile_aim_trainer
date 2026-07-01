@@ -1681,8 +1681,8 @@ class GameEngine extends ChangeNotifier {
 // rapid hits overlap. Fire-and-forget; errors swallowed. Hit=glass, miss=deeppop.
 // ---------------------------------------------------------------------------
 class SoundFx {
-  static const String hitAsset = 'sounds/glass.ogg';
-  static const String missAsset = 'sounds/deeppop.ogg';
+  static const String hitAsset = 'sounds/dragon-studio-pop-402323.mp3';
+  static const String missAsset = 'sounds/u_8e8ungop1x-pop-268648.mp3';
 
   final List<AudioPlayer> _hit = [];
   final List<AudioPlayer> _miss = [];
